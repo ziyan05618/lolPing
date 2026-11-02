@@ -98,18 +98,15 @@ rate-limited during the burst, and echoes ≥ 99% of it.
 
 ## Point lolPing at it
 
-`src/main/relays.ts`:
+The relay URL carries a capability path, so it is **not committed**. It is injected at build time:
 
-```ts
-export const RELAYS: readonly string[] = [
-  'wss://pet-api.zyyun618.com/<RELAY_PATH>',
-  'wss://nos.lol',
-  ...
-];
+```bash
+LOLPING_PRIVATE_RELAY='wss://pet-api.zyyun618.com/<RELAY_PATH>' npm run dist
 ```
 
-Keep at least three public relays. The compatibility rule in that file exists because **both ends must share at
-least one relay** to meet; if you ever remove the private relay, friends on the old build stop seeing you.
+`src/main/relays.ts` puts that first and keeps the six public relays after it, so a plain checkout still works and
+both ends always share at least one relay. Never drop the public relays: two clients must share one to meet, and a
+build without them can only reach people running the same private build.
 
 ## Admin panel
 
