@@ -3,8 +3,7 @@
 #
 #   VPS=root@47.107.156.194 KEY=~/.ssh/id_ed25519_lolping ./deploy.sh
 #
-# It never touches nginx, cloudflared, postgres or anything else already on the box: the relay is its own
-# systemd unit on 127.0.0.1:8787, and the Cloudflare tunnel route is changed by hand in the dashboard.
+# nginx configuration is installed separately after review and `nginx -t`.
 set -euo pipefail
 
 VPS="${VPS:-root@47.107.156.194}"
@@ -15,12 +14,16 @@ SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$VP
 SCP=(scp -i "$KEY" -o StrictHostKeyChecking=accept-new)
 
 echo "==> target $VPS, relay on 127.0.0.1:$PORT"
+node "$HERE/../../tools/build-relay-admin.mjs"
 
 echo "==> creating the service account (no login shell, no home)"
 "${SSH[@]}" "id -u lolping >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin lolping; mkdir -p /opt/lolping-relay"
 
 echo "==> copying the relay"
 "${SCP[@]}" "$HERE/lolping-relay.py" "$VPS:/opt/lolping-relay/lolping-relay.py"
+"${SCP[@]}" "$HERE/admin.py" "$VPS:/opt/lolping-relay/admin.py"
+"${SSH[@]}" "mkdir -p /opt/lolping-relay/admin /var/lib/lolping-relay; chown lolping:lolping /var/lib/lolping-relay"
+"${SCP[@]}" "$HERE/admin/"*.html "$HERE/admin/room-policy.js" "$VPS:/opt/lolping-relay/admin/"
 "${SCP[@]}" "$HERE/lolping-relay.service" "$VPS:/etc/systemd/system/lolping-relay.service"
 
 echo "==> writing the environment file (the capability path is generated once and kept)"
@@ -42,10 +45,6 @@ echo "==> writing the environment file (the capability path is generated once an
 sleep 2
 echo "==> status"
 "${SSH[@]}" "systemctl is-active lolping-relay; systemctl --no-pager --lines=5 status lolping-relay | tail -6; ss -lntp | grep ':$PORT ' || echo 'WARNING: nothing listening on $PORT'"
-
-echo
-echo "==> capability path (append to wss://pet-api.zyyun618.com):"
-"${SSH[@]}" "grep '^RELAY_PATH=' /etc/lolping-relay.env | cut -d= -f2"
 
 echo
 echo "The relay is up on 127.0.0.1:$PORT. Public access goes through nginx, not the Cloudflare tunnel:"

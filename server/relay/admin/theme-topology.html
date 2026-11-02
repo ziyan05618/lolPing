@@ -69,6 +69,7 @@
   <div class="sub" id="p-sub">点一个节点看详情</div>
   <dl class="kv" id="p-kv"></dl>
   <button id="p-ban" hidden>封禁这个地址 24 小时</button>
+  <div id="room-policy"></div>
   <p class="hint" id="p-hint">房间码的哈希决定节点的位置。连线越亮，事件越多。红圈的地址开了不止一条连接。</p>
 </aside>
 
@@ -78,6 +79,7 @@
   <div><i style="background:#ff4d6a"></i>同 IP 多连接</div>
 </div>
 
+<script src="room-policy.js"></script>
 <script>
 const DEMO = {
   overview: { online: 3, unique_ips_online: 3, rooms_online: 1, uptime_s: 1077, events_this_minute: 42, peak_online: 5 },
@@ -206,6 +208,7 @@ async function render() {
   document.getElementById('t-rooms').textContent = ov.rooms_online;
   document.getElementById('t-events').textContent = ov.events_this_minute;
   draw(rooms, sessions, ov);
+  roomPolicyPanel.render('room-policy', rooms, render, TOKEN);
 }
 
 addEventListener('resize', render);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { atBottom, boardSlots, initial, memberCount, memberFlags, rowActions, statusTip } from '../../src/renderer/panel/roster';
 import { strings } from '../../src/shared/i18n';
 import type { RoomMember, RoomStateCore } from '../../src/shared/room';
+import { DEFAULT_ROOM_POLICY } from '../../src/shared/roomPolicy';
 
 const member = (over: Partial<RoomMember> = {}): RoomMember => ({
   peer: 'bb', name: 'Alex', color: 0, rgb: null, path: 'lan', status: 'on', needsUpdate: false, noEmotes: false,
@@ -51,6 +52,7 @@ describe('memberCount', () => {
     const room: RoomStateCore = {
       phase: 'active', code: 'PING-AAAAA-BBBBB', members: [member(), member({ peer: 'cc' }), member({ peer: 'dd' })],
       lan: 'ok', internet: 'ok', lonely: false, clockSkew: false,
+      policy: { limits: { ...DEFAULT_ROOM_POLICY }, claimed: false, owner: false, available: false },
     };
     expect(memberCount({ room, max: 16 })).toBe('3 / 16');
   });

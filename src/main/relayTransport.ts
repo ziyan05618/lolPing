@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { roomEventTags, taggedRoomEventType, type RoomEventType } from '../shared/roomProtocol';
 import { makeKeyPair, ROOM_EVENT_KIND, signEvent, type KeyPair, type NostrEvent } from './nostrEvent';
 import type { SocketFactory } from './relayConnection';
 import { RelayPool } from './relayPool';
@@ -100,14 +101,14 @@ export class RelayTransport extends EventEmitter implements Transport {
   }
 
   /** Every member hears every event, so a packet for one is a packet for all. */
-  sendTo(_peer: PeerKey, packet: Uint8Array): void {
-    this.broadcast(packet);
+  sendTo(_peer: PeerKey, packet: Uint8Array, type?: RoomEventType): void {
+    this.broadcast(packet, type);
   }
 
-  broadcast(packet: Uint8Array): void {
+  broadcast(packet: Uint8Array, type?: RoomEventType): void {
     if (!this.pool || !this.pair) return;
     const content = Buffer.from(packet.buffer, packet.byteOffset, packet.length).toString('base64');
-    const e = signEvent(this.pair, ROOM_EVENT_KIND, [['x', this.topic]], content, Math.floor(Date.now() / 1000));
+    const e = signEvent(this.pair, ROOM_EVENT_KIND, roomEventTags(this.topic, type), content, Math.floor(Date.now() / 1000));
     this.lastSent = this.pool.publish(e) > 0 ? e.id : null;
   }
 
@@ -123,7 +124,7 @@ export class RelayTransport extends EventEmitter implements Transport {
 
   private onEvent(e: NostrEvent): void {
     if (e.content.length > MAX_CONTENT || !BASE64.test(e.content)) return;
-    this.emit('packet', `net:${e.pubkey}`, Buffer.from(e.content, 'base64'));
+    this.emit('packet', `net:${e.pubkey}`, Buffer.from(e.content, 'base64'), taggedRoomEventType(e.tags));
   }
 
   private setStatus(s: TransportStatus): void {

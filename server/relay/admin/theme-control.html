@@ -112,6 +112,7 @@
         <div class="spark"><svg id="spark" viewBox="0 0 300 92" preserveAspectRatio="none"></svg></div>
         <div class="head" style="border-top:1px solid var(--line)"><h2>房间</h2></div>
         <table><tbody id="rooms"><tr><td class="empty">暂无房间</td></tr></tbody></table>
+        <div id="room-policy"></div>
       </section>
     </div>
     <div class="cols">
@@ -130,6 +131,7 @@
   </main>
 </div>
 
+<script src="room-policy.js"></script>
 <script>
 const DEMO = {
   overview: { online: 3, unique_ips_online: 3, rooms_online: 1, uptime_s: 1077, events_this_minute: 42,
@@ -218,6 +220,7 @@ async function render() {
   });
 
   const roomBox = document.getElementById('rooms');
+  roomPolicyPanel.render('room-policy', rooms, render, TOKEN);
   roomBox.innerHTML = rooms.length === 0 ? '<tr><td class="empty">暂无房间</td></tr>'
     : rooms.slice(0, 6).map((r) => `<tr>
         <td class="ip">${r.room}</td>

@@ -1,8 +1,6 @@
 import { EMOTE_CATALOG } from '../../shared/emoteCatalog';
 import {
-  CUSTOM_EMOTE_URL, allEmoteAssetFiles, catalogEmote, customAnimUrl, customHash, customSoundUrl, customStillUrl, emoteSoundUrl,
-  isBundledEmote,
-  type EmoteArt, type EmoteRef,
+  CUSTOM_EMOTE_URL, allEmoteAssetFiles, catalogEmote, emoteSoundUrl, type EmoteArt,
 } from '../../shared/emotes';
 import {
   DEFAULT_CLICK_PING, TICK_SOUND, allSoundNames, allTextureNames, pingById, pingsFor, soundUrl, textureUrl, type PingDef,
@@ -50,16 +48,6 @@ const centers = centerIcons(settings);
 // The ask wheel is the ping wheel dressed in the teammate's colour, with each slice's intent label on hover.
 const pingWheel = new Wheel(pingSvg, 'PING', centers.ping, tick);
 const emoteWheel = new Wheel(emoteSvg, 'EMOTE', centers.emote, tick);
-
-/** This machine's own emotes: the settings know what an imported one looks like, whether it moves and has a sound. */
-function localArt(ref: EmoteRef): EmoteArt {
-  if (isBundledEmote(ref)) return { kind: 'bundled', slug: ref };
-  const custom = settings.customEmotes.find((c) => c.id === ref);
-  if (!custom) return { kind: 'placeholder' };
-  const hash = customHash(ref);
-  const sound = custom.sound ? { sound: customSoundUrl(hash) } : {};
-  return { kind: 'custom', url: custom.animated ? customAnimUrl(hash) : customStillUrl(hash), animated: custom.animated, ...sound, fx: custom.fx ?? 0 };
-}
 
 /** Our newest ping on this display while "Keep my last ping on screen" is on. */
 let keptPing: HTMLElement | null = null;
@@ -146,7 +134,6 @@ window.overlay.on('wheel:release', (p) => {
   const chosen = wheelOf(p).release(p.x, p.y);
   if (!chosen) return;
   if (p.wheel === 'emote') {
-    emote('self', localArt(chosen.key), chosen.x, chosen.y);
     window.overlay.reportEmote(chosen.key, chosen.x, chosen.y);
   } else if (p.wheel === 'ask') {
     // The main process reports the ask itself; this ping is only ours to see, so it is never reported to a room.
@@ -154,7 +141,6 @@ window.overlay.on('wheel:release', (p) => {
     if (def && !settings.ask.disabled.includes(def.id)) ping(def, chosen.x, chosen.y);
   } else {
     const def = pingById(chosen.key) ?? fallbackPing;
-    ping(def, chosen.x, chosen.y, undefined, settings.keepLastPing);
     window.overlay.reportPing(def.id, chosen.x, chosen.y);
   }
 });

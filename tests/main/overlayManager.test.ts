@@ -156,6 +156,25 @@ describe('OverlayManager wheels', () => {
 });
 
 describe('OverlayManager emote clicks', () => {
+  it('checks the room quota before showing a click or wheel emote and before clearing the last accepted one', () => {
+    let remaining = 20;
+    mgr.setSharing({ ping: () => true, emote: () => remaining-- > 0 });
+    for (let i = 0; i < 21; i++) mgr.handle({ type: 'click', x: 10, y: 20, wheel: 'emote' });
+    expect(sent(0).filter((m) => m[0] === 'emote:spawn')).toHaveLength(20);
+    expect(sent(1).filter((m) => m[0] === 'emote:clear')).toHaveLength(20);
+    const count = sent(0).length;
+    h.handlers.get(OVERLAY_EMOTED)!({ sender: h.windows[0].webContents }, { ref: 'gg', x: 10, y: 20 });
+    expect(sent(0)).toHaveLength(count);
+  });
+
+  it('checks ping placement before drawing or replacing a kept ping', () => {
+    mgr.updateSettings(overlaySettings({ ...DEFAULT_SETTINGS, keepLastPing: true }));
+    mgr.setSharing({ ping: () => false, emote: () => true });
+    mgr.handle({ type: 'click', x: 10, y: 20, wheel: 'ping' });
+    h.handlers.get(OVERLAY_PINGED)!({ sender: h.windows[0].webContents }, { id: 'danger', x: 10, y: 20 });
+    expect(sent(0)).toEqual([]);
+    expect(sent(1)).toEqual([]);
+  });
   it('shows the click emote where it was clicked, clears ours on the other displays and shares it', () => {
     const shared = vi.fn();
     mgr.on('sharedEmote', shared);
@@ -389,7 +408,7 @@ describe('OverlayManager emote reports from the overlay', () => {
     h.handlers.get(OVERLAY_EMOTED)!({ sender: sender(1) }, { ref: 'c:' + 'a'.repeat(32), x: 10, y: 20 });
     expect(shared).toHaveBeenCalledWith({ ref: 'c:' + 'a'.repeat(32), displayId: 2, x: 10, y: 20 });
     expect(sent(0)).toEqual([['emote:clear', { owner: 'self' }]]);
-    expect(sent(1)).toEqual([]);
+    expect(sent(1)).toEqual([['emote:spawn', { owner: 'self', art: art('c:' + 'a'.repeat(32), false), x: 10, y: 20 }]]);
   });
 
   it('ignores a malformed report', () => {
@@ -428,7 +447,7 @@ describe('OverlayManager kept ping', () => {
     keepOn();
     h.handlers.get(OVERLAY_PINGED)!({ sender: h.windows[1].webContents }, { id: 'danger', x: 1, y: 2 });
     expect(sent(0)).toEqual([['ping:unkeep', null]]);
-    expect(sent(1)).toEqual([]);
+    expect(sent(1)).toEqual([['ping:spawn', { id: 'danger', x: 1, y: 2, keep: true }]]);
   });
 
   it('drops it everywhere on pause, and sends nothing while the setting is off', () => {

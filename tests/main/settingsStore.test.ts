@@ -12,6 +12,18 @@ const savedTagColor = (dir: string, color: number) =>
   vi.waitFor(() => expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).tagColor).toBe(color), { timeout: 3000 });
 
 describe('SettingsStore', () => {
+  it('persists room owner tokens through a save and restart', async () => {
+    const dir = tempDir();
+    const store = new SettingsStore(dir);
+    store.load();
+    const ownerTokens = { ['ab'.repeat(32)]: 'cd'.repeat(16) };
+    store.update({ ownerTokens });
+    await store.flush();
+    expect(JSON.parse(readFileSync(store.file, 'utf8')).ownerTokens).toEqual(ownerTokens);
+    const restarted = new SettingsStore(dir);
+    expect(restarted.load().ownerTokens).toEqual(ownerTokens);
+    await restarted.flush();
+  });
   it('uses defaults when there is no file', () => {
     const store = new SettingsStore(tempDir());
     expect(store.load()).toEqual(DEFAULT_SETTINGS);

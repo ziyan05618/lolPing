@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { roomEventTags, roomEventType, taggedRoomEventType } from '../../src/shared/roomProtocol';
 import { MAX_PACKET, open, seal } from '../../src/main/roomCrypto';
 import {
   isTagColor, isTagRgb, nearestTagColor, readableTagRgb, sameTagRgb, TAG_COLORS, tagColorCss, tagHex, tagRgbFromHex, tagWire,
@@ -17,6 +18,15 @@ const text: TextMsg = { ...base, t: 'text', text: 'Group mid', d: 2, x: 0.25, y:
 const CUSTOM_REF = `c:${'0123456789abcdef'.repeat(2)}`;
 
 describe('encode / decode', () => {
+  it('labels public event classes without changing room messages or the protocol version', () => {
+    expect(roomEventTags('topic', roomEventType('alive'))).toEqual([['x', 'topic'], ['t', 'text']]);
+    expect(roomEventTags('topic', roomEventType('ballot'))).toEqual([['x', 'topic'], ['t', 'vote']]);
+    expect(roomEventTags('topic', roomEventType('presence'))).toEqual([['x', 'topic']]);
+    expect(taggedRoomEventType([['x', 'topic']])).toBeUndefined();
+    expect(taggedRoomEventType([['t', 'unknown']])).toBeUndefined();
+    expect(taggedRoomEventType([['t', 'ping']])).toBe('ping');
+    expect(taggedRoomEventType([['t', 'emote']])).toBe('emote');
+  });
   it.each<RoomMessage>([presence, ping, emote, text, { ...base, t: 'bye' }])('round-trips $t', (m) => {
     expect(decodeMessage(encodeMessage(m))).toEqual(m);
   });

@@ -5,9 +5,10 @@ import type { PingId } from '../shared/pings';
 import type { JoinResult, MemberPath, RoomMember, RoomStateCore } from '../shared/room';
 import type { TagRgb } from '../shared/roomColors';
 import { formatRoomCode, makeRoomCode, parseRoomCode } from '../shared/roomCode';
+import { DEFAULT_ROOM_POLICY, parseRoomPolicy, type RoomPolicyResult, type RoomPolicyState } from '../shared/roomPolicy';
 import {
   decodeSigned, encodeMessage, isOlderThan, joinSigned, PROTOCOL_VERSION, ROOM_CHAT_SINCE, type BallotMsg, type MemberStatus,
-  type PresenceMsg, type RoomFeatureOff, type RoomMessage, type VoteKind, type VoteMsg,
+  roomEventType, type PresenceMsg, type RoomEventType, type RoomFeatureOff, type RoomMessage, type VoteKind, type VoteMsg,
 } from '../shared/roomProtocol';
 import { RateLimiter } from './rateLimiter';
 import { ReplayGuard } from './replayGuard';
@@ -15,12 +16,14 @@ import {
   makeIdentity, open, peerIdOf, publicKeyOf, seal, signBody, verifyBody, type RoomIdentity, type RoomKeys,
 } from './roomCrypto';
 import type { PeerKey, Transport, TransportStatus } from './transport';
+import type { RoomPolicyService } from './roomPolicyClient';
 
 export const MAX_MEMBERS = 16;
 const SETTLE_MS = 3000;
 /** Relays can take a while to answer: the "room full" check never waits longer than this after joining. */
 const SETTLE_CAP_MS = 15_000;
 const TICK_MS = 1000;
+const POLICY_REFRESH_MS = 10_000;
 /** How often presence is re-announced on each transport. */
 const PRESENCE_MS: Record<Transport['kind'], number> = { lan: 2000, internet: 10_000 };
 /** How long a path counts as alive after the last packet over it. */
@@ -106,6 +109,8 @@ export interface RoomDeps {
   resolveTarget(d: number): { displayId: number; width: number; height: number } | null;
   /** The 32-hex hashes our presence announces: the custom emotes on our wheel and centre. Read on every presence. */
   announceEmotes(): readonly string[];
+  policy?: RoomPolicyService;
+  debug?(line: string): void;
 }
 
 interface Member {
@@ -129,6 +134,7 @@ interface Member {
   paths: Partial<Record<Transport['kind'], { key: PeerKey; seenAt: number }>>;
   /** The key their signed presence proved; null for a member on 0.5.1 or older, who signs nothing. */
   pk: KeyObject | null;
+  policyKey: string;
 }
 
 /**
@@ -185,6 +191,13 @@ export class RoomManager extends EventEmitter {
   private readonly relayCap: RateLimiter;
   /** A presence waiting out SHARED_PRESENCE_MS, per shared transport. */
   private readonly sharedTimers = new Map<Transport, NodeJS.Timeout>();
+  private policyState: RoomPolicyState = {
+    limits: { ...DEFAULT_ROOM_POLICY }, claimed: false, owner: false, available: false,
+  };
+  private readonly policyWindows = new Map<string, number[]>();
+  private policyRequestedAt = -Infinity;
+  private policyPending: number | null = null;
+  private policyRevision = 0;
 
   constructor(private readonly deps: RoomDeps) {
     super();
@@ -197,7 +210,7 @@ export class RoomManager extends EventEmitter {
     this.ballotLimiter = new RateLimiter(deps.now);
     this.relayCap = new RateLimiter(deps.now);
     for (const t of deps.transports) {
-      t.on('packet', (peer: PeerKey, packet: Uint8Array) => this.onPacket(t, peer, packet));
+      t.on('packet', (peer: PeerKey, packet: Uint8Array, type?: RoomEventType) => this.onPacket(t, peer, packet, type));
       t.on('peerGone', (peer: PeerKey) => this.onPeerGone(t, peer));
       t.on('status', (s: TransportStatus) => {
         // A fresh socket: tell everyone now rather than at the next round. Relays say so per relay, with linkUp.
@@ -210,7 +223,7 @@ export class RoomManager extends EventEmitter {
   }
 
   async create(): Promise<void> {
-    await this.start(makeRoomCode(this.deps.randomBytes(9)));
+    await this.start(makeRoomCode(this.deps.randomBytes(9)), true);
   }
 
   async join(text: string): Promise<JoinResult> {
@@ -231,22 +244,22 @@ export class RoomManager extends EventEmitter {
     if (this.phase !== 'idle') this.stop();
   }
 
-  sendPing(ping: PingId, shared: { d: number; x: number; y: number }): void {
-    this.sendShared({ t: 'ping', ping, ...shared });
+  sendPing(ping: PingId, shared: { d: number; x: number; y: number }): boolean {
+    return this.sendShared({ t: 'ping', ping, ...shared });
   }
 
   /** `fx` is the effect stored on the emote's entry here; absent (the plain pop) leaves the field out for the older peers. */
-  sendEmote(e: EmoteRef, shared: { d: number; x: number; y: number }, fx?: number): void {
-    this.sendShared({ t: 'emote', e, ...shared, ...(fx !== undefined ? { fx } : {}) });
+  sendEmote(e: EmoteRef, shared: { d: number; x: number; y: number }, fx?: number): boolean {
+    return this.sendShared({ t: 'emote', e, ...shared, ...(fx !== undefined ? { fx } : {}) });
   }
 
-  sendText(text: string, shared: { d: number; x: number; y: number }): void {
-    this.sendShared({ t: 'text', text, ...shared });
+  sendText(text: string, shared: { d: number; x: number; y: number }): boolean {
+    return this.sendShared({ t: 'text', text, ...shared });
   }
 
   /** `who` is the member whose name the line shows; the receivers write the words themselves. */
-  sendAlive(who: string, shared: { d: number; x: number; y: number }): void {
-    this.sendShared({ t: 'alive', who, ...shared });
+  sendAlive(who: string, shared: { d: number; x: number; y: number }): boolean {
+    return this.sendShared({ t: 'alive', who, ...shared });
   }
 
   sendVote(v: { id: string; kind: VoteKind; target?: string }): void {
@@ -267,17 +280,94 @@ export class RoomManager extends EventEmitter {
   }
 
   /** A ping, an emote, text or a vote message: each member gets it over its own route; shared transports get one send, within the relay cap. */
-  private sendShared(body: Record<string, unknown>): void {
-    if (this.phase === 'idle' || !this.keys || this.paused) return;
+  private sendShared(body: Record<string, unknown>): boolean {
+    if (this.phase === 'idle') return true;
+    if (!this.keys || this.paused) return false;
+    const type = typeof body.t === 'string' ? roomEventType(body.t) : undefined;
+    if (type && !this.allowPolicy(this.identity.pk.toString('base64'), type)) return false;
     const packet = this.seal(body);
     const sharedRoutes = new Set<Transport>();
     for (const m of this.members.values()) {
       const route = this.route(m);
       if (!route) continue;
       if (route.transport.shared) sharedRoutes.add(route.transport);
-      else route.transport.sendTo(route.key, packet);
+      else route.transport.sendTo(route.key, packet, type);
     }
-    for (const t of sharedRoutes) if (this.relayCap.allow(t.kind, RELAY_PING_RATE, RELAY_PING_BURST)) t.broadcast(packet);
+    for (const t of sharedRoutes) if (this.relayCap.allow(t.kind, RELAY_PING_RATE, RELAY_PING_BURST)) t.broadcast(packet, type);
+    return true;
+  }
+
+  /** A sliding window per public key, shared by every route and by local display and publish. */
+  private allowPolicy(pubkey: string, type: RoomEventType): boolean {
+    if (type === 'vote') return true;
+    const limit = type === 'emote' ? this.policyState.limits.emote_per_minute
+      : type === 'text' ? this.policyState.limits.text_per_minute : this.policyState.limits.ping_per_second;
+    if (limit === 0) return true;
+    const now = this.deps.now();
+    const window = type === 'ping' ? 1000 : 60_000;
+    const key = `${pubkey}:${type}`;
+    const times = (this.policyWindows.get(key) ?? []).filter((at) => now - at < window);
+    this.policyWindows.set(key, times);
+    if (times.length >= limit) {
+      this.deps.debug?.(`Room policy dropped ${type} from ${pubkey}`);
+      return false;
+    }
+    times.push(now);
+    return true;
+  }
+
+  async setPolicy(raw: unknown): Promise<RoomPolicyResult> {
+    const policy = parseRoomPolicy(raw);
+    if (!policy) return { ok: false, error: 'invalid' };
+    const service = this.deps.policy;
+    const topic = this.keys?.relayTopic;
+    const token = topic && service?.token(topic);
+    if (!service || !topic || !token || !this.policyState.owner) return { ok: false, error: 'notOwner' };
+    if (!this.internetAllowed) return { ok: false, error: 'unavailable' };
+    const session = this.session;
+    const revision = ++this.policyRevision;
+    this.policyPending = session;
+    let result: RoomPolicyResult;
+    try {
+      result = await service.write(topic, token, policy);
+    } catch {
+      result = { ok: false, error: 'unavailable' };
+    }
+    if (session !== this.session || revision !== this.policyRevision) return { ok: false, error: 'unavailable' };
+    this.policyPending = null;
+    this.policyRequestedAt = this.deps.now();
+    if (result.ok) this.policyState = { limits: policy, claimed: true, owner: true, available: true };
+    else if (result.error === 'notOwner') this.policyState.owner = false;
+    this.emitState();
+    return result;
+  }
+
+  private async refreshPolicy(): Promise<void> {
+    const service = this.deps.policy;
+    const topic = this.keys?.relayTopic;
+    if (!service || !topic || !this.internetAllowed || this.policyPending !== null) return;
+    const session = this.session;
+    const revision = this.policyRevision;
+    this.policyPending = session;
+    this.policyRequestedAt = this.deps.now();
+    try {
+      const token = service.token(topic);
+      const owner = token ? await service.claim(topic, token) : false;
+      if (session !== this.session || revision !== this.policyRevision) return;
+      if (token && !owner && service.token(topic) === token) service.saveToken(topic, null);
+      const result = await service.read(topic);
+      if (session !== this.session || revision !== this.policyRevision) return;
+      this.policyState = { ...result, owner: owner && result.claimed, available: true };
+    } catch {
+      if (session !== this.session || revision !== this.policyRevision) return;
+      this.policyState = { limits: { ...DEFAULT_ROOM_POLICY }, claimed: false, owner: false, available: false };
+      this.deps.debug?.('Room policy unavailable; using built-in quotas');
+    } finally {
+      if (session === this.session && revision === this.policyRevision) {
+        this.policyPending = null;
+        this.emitState();
+      }
+    }
   }
 
   /** How a member is reached right now, for emote transfers: cheap LAN unicast, one-cast-reaches-all relays, or neither. */
@@ -341,6 +431,11 @@ export class RoomManager extends EventEmitter {
   setInternetAllowed(on: boolean): void {
     if (on === this.internetAllowed) return;
     this.internetAllowed = on;
+    this.policyRevision++;
+    this.policyPending = null;
+    this.policyRequestedAt = -Infinity;
+    if (!on) this.policyState = { limits: { ...DEFAULT_ROOM_POLICY }, claimed: false, owner: false, available: false };
+    else void this.refreshPolicy();
     const keys = this.keys;
     if (!keys) return; // idle, or still deriving keys: start() reads the flag
     for (const t of this.deps.transports) {
@@ -396,11 +491,12 @@ export class RoomManager extends EventEmitter {
       internet: status('internet'),
       lonely: this.aloneSince !== null && now - this.aloneSince >= LONELY_MS,
       clockSkew: [...this.staleStrikes.values()].some((s) => s.count >= STALE_STRIKES && now - s.at < SKEW_HINT_MS),
+      policy: { ...this.policyState, limits: { ...this.policyState.limits } },
     };
   }
 
   /** False when the keys couldn't be derived: the room is back to idle. */
-  private async start(code: string): Promise<boolean> {
+  private async start(code: string, create = false): Promise<boolean> {
     if (this.phase !== 'idle') this.leave();
     const session = ++this.session;
     this.identity = makeIdentity(this.deps.randomBytes(32));
@@ -422,6 +518,9 @@ export class RoomManager extends EventEmitter {
     }
     if (session !== this.session) return true; // left while deriving
     this.keys = keys;
+    if (create && this.deps.policy && !this.deps.policy.token(keys.relayTopic)) {
+      this.deps.policy.saveToken(keys.relayTopic, Buffer.from(this.deps.randomBytes(16)).toString('hex'));
+    }
     this.joinedAt = this.lastTick = this.deps.now();
     this.settleShort = false;
     this.settle = setTimeout(() => this.settled(), SETTLE_CAP_MS);
@@ -431,6 +530,7 @@ export class RoomManager extends EventEmitter {
     this.ticker = setInterval(() => this.tick(), TICK_MS);
     this.checkSettle();
     this.emitState();
+    void this.refreshPolicy();
     return true;
   }
 
@@ -480,6 +580,11 @@ export class RoomManager extends EventEmitter {
     this.timedOut.clear();
     this.lastPresence = {};
     this.aloneSince = null;
+    this.policyRevision++;
+    this.policyPending = null;
+    this.policyRequestedAt = -Infinity;
+    this.policyState = { limits: { ...DEFAULT_ROOM_POLICY }, claimed: false, owner: false, available: false };
+    this.policyWindows.clear();
     this.emitState();
   }
 
@@ -487,6 +592,13 @@ export class RoomManager extends EventEmitter {
     const now = this.deps.now();
     if (now - this.lastTick > SLEEP_GAP_MS) this.wokeAt = now;
     this.lastTick = now;
+    if (now - this.policyRequestedAt >= POLICY_REFRESH_MS) void this.refreshPolicy();
+    for (const [key, times] of this.policyWindows) {
+      const window = key.endsWith(':ping') ? 1000 : 60_000;
+      const live = times.filter((at) => now - at < window);
+      if (live.length) this.policyWindows.set(key, live);
+      else this.policyWindows.delete(key);
+    }
     for (const [peer, s] of this.staleStrikes) if (now - s.at >= SKEW_HINT_MS) this.staleStrikes.delete(peer);
     for (const m of [...this.members.values()]) {
       const heard = Math.max(...Object.values(m.paths).map((p) => p.seenAt), m.firstSeen, this.wokeAt);
@@ -498,7 +610,7 @@ export class RoomManager extends EventEmitter {
     this.emitState();
   }
 
-  private onPacket(t: Transport, key: PeerKey, packet: Uint8Array): void {
+  private onPacket(t: Transport, key: PeerKey, packet: Uint8Array, eventType?: RoomEventType): void {
     if (!this.keys) return;
     const plain = open(this.keys.msgKey, packet);
     const decoded = plain && decodeSigned(plain);
@@ -534,6 +646,13 @@ export class RoomManager extends EventEmitter {
     }
     if (!m) return;
     this.heard(m, t, key);
+    const type = roomEventType(msg.t);
+    if (type && msg.t !== 'ballot') {
+      const quotaType = t.shared ? eventType ?? 'ping' : type;
+      // A missing tag is legacy traffic; a label for another class must not bypass its quota.
+      if (t.shared && eventType !== undefined && eventType !== type) return;
+      if (!this.allowPolicy(m.policyKey, quotaType)) return;
+    }
     // Emote still requests travel in their own bucket: a flood of wants still meets a wall. A paused lolPing neither
     // fetches nor serves stills. An app on another protocol generation can't have sent these (its validator drops
     // unknown types), so that check is defence in depth.
@@ -596,12 +715,14 @@ export class RoomManager extends EventEmitter {
         peer: msg.peer, name: msg.name, color: msg.color, rgb: msg.rgb ?? null, status: msg.status,
         needsUpdate: false, noEmotes: false, noChat: false, textOff: false, votesOff: false, muted: false, em: [],
         firstSeen: this.deps.now(), viaInternet: false, paths: {}, pk: null,
+        policyKey: pk && msg.pk ? msg.pk : key,
       };
       this.members.set(m.peer, m);
       this.aloneSince = null;
     }
     if (pk) {
       m.pk = pk;
+      if (msg.pk) m.policyKey = msg.pk;
       this.boundIds.add(m.peer);
     }
     m.name = msg.name;

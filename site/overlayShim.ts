@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import type { OverlayApi } from '../src/preload/overlay';
 import type { OverlayChannel, OverlayEvents } from '../src/shared/ipc';
+import { isBundledEmote } from '../src/shared/emotes';
 
 // Stands in for the overlay preload. The page sends the overlay the same messages the main process sends in the app.
 type Listener = (payload: never) => void;
@@ -13,11 +14,11 @@ const api: OverlayApi = {
   reportMissingAssets(names) {
     console.warn('lolPing demo: missing assets', names);
   },
-  reportPing() {
-    // the demo has no room to share pings with
+  reportPing(id, x, y) {
+    emit('ping:spawn', { id, x, y });
   },
-  reportEmote() {
-    // nor emotes
+  reportEmote(ref, x, y) {
+    emit('emote:spawn', { owner: 'self', art: isBundledEmote(ref) ? { kind: 'bundled', slug: ref } : { kind: 'placeholder' }, x, y });
   },
   reportIdle() {
     // the page is the overlay, so there is no window to hide

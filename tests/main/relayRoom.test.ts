@@ -4,6 +4,8 @@ import { LanTransport } from '../../src/main/lanTransport';
 import { RelayTransport } from '../../src/main/relayTransport';
 import { deriveRoomKeys } from '../../src/main/roomCrypto';
 import { RoomManager, type RemotePing, type RoomToast } from '../../src/main/roomManager';
+import type { RoomPolicyService } from '../../src/main/roomPolicyClient';
+import { DEFAULT_ROOM_POLICY } from '../../src/shared/roomPolicy';
 import type { Transport } from '../../src/main/transport';
 import { makeRoomCode } from '../../src/shared/roomCode';
 import { startFakeRelay } from './fixtures/fakeRelay';
@@ -19,10 +21,11 @@ async function until(cond: () => boolean, ms = 6000): Promise<void> {
   }
 }
 
-function peer(name: string, transports: Transport[]) {
+function peer(name: string, transports: Transport[], options: { now?: () => number; policy?: RoomPolicyService } = {}) {
   const room = new RoomManager({
     transports,
-    now: Date.now,
+    now: options.now ?? Date.now,
+    policy: options.policy,
     randomBytes: (n) => randomBytes(n),
     deriveKeys: deriveRoomKeys,
     appVersion: '0.4.0',
@@ -52,6 +55,32 @@ afterEach(async () => {
 });
 
 describe('rooms over a relay', () => {
+  it('shows twenty emotes on both sender and receiver and drops the twenty-first before publishing', async () => {
+    let now = Date.now();
+    const policy: RoomPolicyService = {
+      token: () => undefined, saveToken: () => undefined, claim: async () => false,
+      read: async () => ({ claimed: true, limits: { ...DEFAULT_ROOM_POLICY } }), write: async () => ({ ok: true }),
+    };
+    const a = peer('Ana', [new RelayTransport({ urls: [relay.url] })], { now: () => now, policy });
+    const b = peer('Ben', [new RelayTransport({ urls: [relay.url] })], { now: () => now, policy });
+    peers.push(a, b);
+    const shownAtA: unknown[] = [];
+    let shownAtB = 0;
+    a.room.on('remoteEmote', (p: unknown) => shownAtA.push(p));
+    b.room.on('remoteEmote', () => shownAtB++);
+    await Promise.all([a.room.join(CODE), b.room.join(CODE)]);
+    await until(() => a.room.state().members.length === 2 && b.room.state().members.length === 2);
+    let localAtB = 0;
+    for (let i = 0; i < 21; i++) {
+      now += 250; // Refill the relay pacing bucket without sleeping; still inside one quota minute.
+      if (b.room.sendEmote('gg', { d: 1, x: 0.5, y: 0.5 })) localAtB++;
+    }
+    await until(() => shownAtA.length === 20);
+    expect(localAtB).toBe(20);
+    expect(a.room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
+    await until(() => shownAtB === 1);
+    expect(shownAtA).toHaveLength(20);
+  });
   it('two rooms meet over a relay, exchange a ping, and see bye', async () => {
     const a = peer('Ana', [new RelayTransport({ urls: [relay.url] })]);
     const b = peer('Ben', [new RelayTransport({ urls: [relay.url] })]);

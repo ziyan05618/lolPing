@@ -10,6 +10,17 @@ import {
 import type { AskTrigger } from '../../src/shared/teammate/settings';
 
 describe('normalizeSettings', () => {
+  it('defaults owner tokens for old settings and retains only valid topic and token entries', () => {
+    expect(normalizeSettings({}).ownerTokens).toEqual({});
+    const tokens = { abc: 'a'.repeat(32), def: 'B'.repeat(32), short: 'abc', invalid: 'g'.repeat(32), number: 5 };
+    expect(normalizeSettings({ ownerTokens: tokens }).ownerTokens).toEqual({ abc: tokens.abc, def: tokens.def });
+    for (const ownerTokens of [[], null, 'token', 20]) expect(normalizeSettings({ ownerTokens }).ownerTokens).toEqual({});
+    expect(normalizeSettings({ ownerTokens: { '../topic': 'a'.repeat(32) } }).ownerTokens).toEqual({});
+  });
+
+  it('does not let a renderer replace the owner token store', () => {
+    expect(rendererPatch({ ownerTokens: { abc: 'a'.repeat(32) }, volume: 20 })).toEqual({ volume: 20 });
+  });
   it('loads a 0.5.3 settings file with the teammate off', () => {
     const { teammate: _t, features: _f, ...old } = DEFAULT_SETTINGS;
     const s = normalizeSettings({ ...old, features: { emotes: false, rooms: true } });

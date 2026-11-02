@@ -13,11 +13,11 @@ const api = {
   reportMissingAssets(names: string[]): void {
     ipcRenderer.send(OVERLAY_ASSETS, names);
   },
-  /** A wheel ping was placed here (CSS px in this overlay). */
+  /** A wheel ping proposed for main's quota check (CSS px in this overlay). */
   reportPing(id: PingId, x: number, y: number): void {
     ipcRenderer.send(OVERLAY_PINGED, { id, x, y });
   },
-  /** A wheel emote was placed here (CSS px in this overlay). */
+  /** A wheel emote proposed for main's quota check (CSS px in this overlay). */
   reportEmote(ref: EmoteRef, x: number, y: number): void {
     ipcRenderer.send(OVERLAY_EMOTED, { ref, x, y });
   },

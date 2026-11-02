@@ -14,6 +14,8 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -27,6 +29,10 @@ ADMIN_DIR = Path(__file__).resolve().parent / "admin"
 # A room's topic is derived from the room code, so it identifies a room without revealing the code. Truncated so
 # the admin page shows something short and stable.
 ROOM_LABEL_LEN = 10
+OWNER_TTL = 86400
+TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+TOKEN_RE = re.compile(r"[0-9a-fA-F]{32}\Z")
+DEFAULT_POLICY = {"emote_per_minute": 20, "ping_per_second": 5, "text_per_minute": 10}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -69,6 +75,19 @@ CREATE TABLE IF NOT EXISTS rooms (
   last_seen INTEGER NOT NULL,
   events INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS room_owner (
+  topic TEXT PRIMARY KEY,
+  owner_token TEXT NOT NULL,
+  claimed_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS room_policy (
+  topic TEXT PRIMARY KEY REFERENCES room_owner(topic),
+  emote_per_minute INTEGER NOT NULL DEFAULT 20,
+  ping_per_second INTEGER NOT NULL DEFAULT 5,
+  text_per_minute INTEGER NOT NULL DEFAULT 10,
+  updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -110,8 +129,10 @@ class Session:
 class Tracker:
     """Counts what the relay does and answers the admin page's questions."""
 
-    def __init__(self, db_path: str = DB_PATH) -> None:
+    def __init__(self, db_path: str = DB_PATH, now: Callable[[], float] = time.time) -> None:
         self.path = db_path
+        self.now = now
+        self.event_types = {kind: 0 for kind in ("ping", "emote", "text", "vote")}
         self.live: dict[str, Session] = {}
         self.started = int(time.time())
         self.bans: dict[str, dict[str, Any]] = {}
@@ -129,6 +150,7 @@ class Tracker:
         try:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(self.path, check_same_thread=False)
+            self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(SCHEMA)
             self._conn.commit()
         except (OSError, sqlite3.Error) as err:
@@ -184,11 +206,81 @@ class Tracker:
              ",".join(sorted(s.rooms)), s.agent, reason),
         )
 
-    def on_event_in(self, s: Session, nbytes: int) -> None:
+    def on_event_in(self, s: Session, nbytes: int, event_type: str = "ping") -> None:
         s.events_in += 1
         s.bytes_in += nbytes
         self.minute["events_in"] += 1
         self.minute["bytes_in"] += nbytes
+        self.event_types[event_type if event_type in self.event_types else "ping"] += 1
+
+    # -- room ownership and public quotas -----------------------------------------------------------------------
+
+    def _policy_db(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError("policy storage unavailable")
+        return self._conn
+
+    def _expire_owners(self, db: sqlite3.Connection, now: int) -> None:
+        db.execute("DELETE FROM room_policy WHERE topic IN (SELECT topic FROM room_owner WHERE last_seen <= ?)",
+                   (now - OWNER_TTL,))
+        db.execute("DELETE FROM room_owner WHERE last_seen <= ?", (now - OWNER_TTL,))
+
+    def touch_room(self, topic: str) -> None:
+        if not TOPIC_RE.fullmatch(topic) or self._conn is None:
+            return
+        now = int(self.now())
+        with self._conn:
+            self._expire_owners(self._conn, now)
+            self._conn.execute("UPDATE room_owner SET last_seen = ? WHERE topic = ?", (now, topic))
+
+    def claim(self, topic: str, token: str) -> bool:
+        db = self._policy_db()
+        now = int(self.now())
+        with db:
+            # Taking the write lock before reading makes simultaneous claims first-writer-wins across processes too.
+            db.execute("BEGIN IMMEDIATE")
+            self._expire_owners(db, now)
+            db.execute("INSERT OR IGNORE INTO room_owner VALUES (?,?,?,?)", (topic, token, now, now))
+            owner = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
+            matches = owner is not None and secrets.compare_digest(owner[0], token)
+            if matches:
+                db.execute("UPDATE room_owner SET last_seen = ? WHERE topic = ?", (now, topic))
+                db.execute("INSERT OR IGNORE INTO room_policy (topic, updated_at) VALUES (?,?)", (topic, now))
+            return matches
+
+    def read_policy(self, topic: str) -> dict[str, Any]:
+        db = self._policy_db()
+        now = int(self.now())
+        with db:
+            self._expire_owners(db, now)
+            row = db.execute("SELECT emote_per_minute, ping_per_second, text_per_minute FROM room_policy"
+                             " WHERE topic = ?", (topic,)).fetchone()
+            if row is None:
+                return {"topic": topic, "claimed": False}
+            db.execute("UPDATE room_owner SET last_seen = ? WHERE topic = ?", (now, topic))
+        return {"topic": topic, "claimed": True, **dict(zip(DEFAULT_POLICY, row))}
+
+    def write_policy(self, topic: str, token: str, policy: dict[str, int]) -> bool:
+        db = self._policy_db()
+        now = int(self.now())
+        with db:
+            self._expire_owners(db, now)
+            row = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
+            if row is None or not secrets.compare_digest(row[0], token):
+                return False
+            db.execute("UPDATE room_policy SET emote_per_minute=?, ping_per_second=?, text_per_minute=?,"
+                       " updated_at=? WHERE topic=?", (*[policy[k] for k in DEFAULT_POLICY], now, topic))
+            db.execute("UPDATE room_owner SET last_seen=? WHERE topic=?", (now, topic))
+        return True
+
+    def clear_claim(self, room: str) -> dict[str, Any]:
+        db = self._policy_db()
+        with db:
+            topics = [r[0] for r in db.execute("SELECT topic FROM room_owner") if room_label(r[0]) == room]
+            for topic in topics:
+                db.execute("DELETE FROM room_policy WHERE topic = ?", (topic,))
+                db.execute("DELETE FROM room_owner WHERE topic = ?", (topic,))
+        return {"ok": True, "cleared": len(topics)}
 
     def on_event_out(self, s: Session, room: str, nbytes: int) -> None:
         s.events_out += 1
@@ -262,6 +354,7 @@ class Tracker:
             "events_this_minute": self.minute["events_in"] + self.minute["events_out"],
             "peak_online": max(self.minute["peak"], len(self.live)),
             **totals,
+            "event_types": dict(self.event_types),
         }
 
     def sessions(self) -> list[dict[str, Any]]:
@@ -279,6 +372,13 @@ class Tracker:
                  "agent": r[8], "close_reason": r[9]} for r in rows]
 
     def room_list(self) -> list[dict[str, Any]]:
+        policies: dict[str, dict[str, int]] = {}
+        if self._conn:
+            with self._conn:
+                self._expire_owners(self._conn, int(self.now()))
+            for topic, emote, ping, text in self._conn.execute(
+                    "SELECT topic, emote_per_minute, ping_per_second, text_per_minute FROM room_policy"):
+                policies[room_label(topic)] = dict(zip(DEFAULT_POLICY, (emote, ping, text)))
         live: dict[str, int] = {}
         for s in self.live.values():
             for r in s.rooms:
@@ -291,6 +391,12 @@ class Tracker:
                             "online": live.pop(room, 0)})
         for room, n in live.items():
             out.append({"room": room, "first_seen": None, "last_seen": int(time.time()), "events": 0, "online": n})
+        present = {r["room"] for r in out}
+        for room in policies.keys() - present:
+            out.append({"room": room, "first_seen": None, "last_seen": int(self.now()), "events": 0, "online": 0})
+        for row in out:
+            row["owner"] = row["room"] in policies
+            row["policy"] = policies.get(row["room"], dict(DEFAULT_POLICY))
         return out
 
     def timeseries(self, minutes: int = 60) -> list[dict[str, Any]]:
@@ -315,8 +421,9 @@ def _response(status: int, body: bytes, ctype: str) -> bytes:
             f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n").encode() + body
 
 
-_REASON = {200: "OK", 204: "No Content", 401: "Unauthorized", 404: "Not Found", 405: "Method Not Allowed",
-           500: "Internal Server Error"}
+_REASON = {200: "OK", 204: "No Content", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+           404: "Not Found", 405: "Method Not Allowed", 413: "Payload Too Large",
+           500: "Internal Server Error", 503: "Service Unavailable"}
 
 
 def _json(status: int, payload: Any) -> bytes:
@@ -365,7 +472,15 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
     path, query = _parse_query(raw_path)
 
     body = b""
-    length = int(headers.get("content-length", "0") or 0)
+    try:
+        length = int(headers.get("content-length", "0") or 0)
+        if length < 0 or length > 65536:
+            raise ValueError("body size")
+    except ValueError:
+        writer.write(_json(400, {"error": "invalid content length"}))
+        await writer.drain()
+        writer.close()
+        return
     if length:
         try:
             body = await asyncio.wait_for(reader.readexactly(min(length, 65536)), timeout=10)
@@ -373,6 +488,45 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             body = b""
 
     try:
+        public = path in ("/claim", "/policy") or path.startswith("/policy/")
+        if public:
+            payload = None
+            if method == "POST":
+                try:
+                    payload = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+                if not isinstance(payload, dict):
+                    writer.write(_json(400, {"error": "invalid JSON object"}))
+                    return
+            if method == "GET" and path.startswith("/policy/"):
+                topic = path[len("/policy/"):]
+            else:
+                topic = payload.get("topic") if isinstance(payload, dict) else None
+            if not isinstance(topic, str) or not TOPIC_RE.fullmatch(topic):
+                writer.write(_json(400, {"error": "invalid topic"}))
+                return
+            if method == "GET" and path.startswith("/policy/"):
+                writer.write(_json(200, tracker.read_policy(topic)))
+                return
+            token = payload.get("token") if isinstance(payload, dict) else None
+            if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+                writer.write(_json(400, {"error": "invalid token"}))
+                return
+            if method == "POST" and path == "/claim":
+                writer.write(_json(200, {"ok": True, "owner": tracker.claim(topic, token)}))
+            elif method == "POST" and path == "/policy":
+                policy = {key: payload.get(key) for key in DEFAULT_POLICY}
+                if any(type(v) is not int or v < 0 or v > 600 for v in policy.values()):
+                    writer.write(_json(400, {"error": "quotas must be integers from 0 to 600"}))
+                elif tracker.write_policy(topic, token, policy):
+                    writer.write(_json(200, {"ok": True}))
+                else:
+                    writer.write(_json(403, {"error": "not owner"}))
+            else:
+                writer.write(_json(405, {"error": "method not allowed"}))
+            return
+
         if path == "/" or path == "/index.html":
             page = ADMIN_DIR / "index.html"
             if not page.exists():
@@ -425,10 +579,16 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             writer.write(_json(200, tracker.unban(str(payload.get("ip", "")))))
         elif method == "POST" and path == "/api/kick":
             writer.write(_json(200, tracker.kick_ip(str(payload.get("ip", "")))))
+        elif method == "POST" and path == "/api/clear-claim":
+            room = payload.get("room") if isinstance(payload, dict) else None
+            if not isinstance(room, str) or not re.fullmatch(r"[0-9a-f]{10}", room):
+                writer.write(_json(400, {"error": "invalid room"}))
+            else:
+                writer.write(_json(200, tracker.clear_claim(room)))
         else:
             writer.write(_json(404, {"error": "no such endpoint"}))
-    except Exception as err:  # never let an admin request take the relay down
-        writer.write(_json(500, {"error": str(err)}))
+    except Exception:  # database details and credentials must never reach the public API
+        writer.write(_json(503, {"error": "service unavailable"}))
     finally:
         try:
             await writer.drain()

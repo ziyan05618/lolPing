@@ -46,6 +46,18 @@ afterEach(() => {
 });
 
 describe('RelayTransport', () => {
+  it('publishes type labels without changing the encrypted content and preserves absent legacy labels', () => {
+    relay.start(KEYS);
+    last().open();
+    const types: unknown[] = [];
+    relay.on('packet', (_peer, _data, type: unknown) => types.push(type));
+    relay.broadcast(Uint8Array.from([1, 2, 3]), 'emote');
+    expect(published(last())[0]).toMatchObject({ tags: [['x', KEYS.relayTopic], ['t', 'emote']], content: 'AQID' });
+    const event = signEvent(other, 24747, [['x', KEYS.relayTopic], ['t', 'text']], 'AQID', Math.floor(Date.now() / 1000));
+    last().receive(['EVENT', 'lolping', event]);
+    last().receive(['EVENT', 'lolping', theirs('BAUG')]);
+    expect(types).toEqual(['text', undefined]);
+  });
   it('is a shared internet transport', () => {
     expect(relay.kind).toBe('internet');
     expect(relay.shared).toBe(true);

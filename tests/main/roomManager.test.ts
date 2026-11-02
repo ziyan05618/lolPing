@@ -7,6 +7,8 @@ import {
 } from '../../src/main/roomManager';
 import { formatRoomCode, makeRoomCode } from '../../src/shared/roomCode';
 import type { TagRgb } from '../../src/shared/roomColors';
+import { DEFAULT_ROOM_POLICY, type RoomPolicy } from '../../src/shared/roomPolicy';
+import type { RoomPolicyService } from '../../src/main/roomPolicyClient';
 import {
   decodeMessage, decodeSigned, encodeMessage, joinSigned, type BallotMsg, type RoomFeatureOff, type RoomMessage, type VoteMsg,
 } from '../../src/shared/roomProtocol';
@@ -360,13 +362,17 @@ describe('incoming pings', () => {
     expect(pings).toHaveLength(0);
   });
 
-  it('rate-limits each member, 0 meaning unlimited', () => {
+  it('keeps the room quota when the personal incoming rate limit is turned off', async () => {
     profile.limit = 2;
     for (let i = 0; i < 5; i++) alex.ping();
     expect(pings).toHaveLength(2);
     profile.limit = 0;
     for (let i = 0; i < 50; i++) alex.ping();
-    expect(pings).toHaveLength(52);
+    expect(pings).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    alex.presence();
+    for (let i = 0; i < 50; i++) alex.ping();
+    expect(pings).toHaveLength(7);
   });
 
   it('drops a ping when there is no display to show it on', () => {
@@ -657,6 +663,11 @@ describe('internet over a shared transport', () => {
       deriveKeys: async () => KEYS, appVersion: '0.4.0', profile: () => profile,
       resolveTarget: () => ({ displayId: 1, width: 100, height: 100 }),
       announceEmotes: () => [],
+      policy: {
+        token: () => undefined, saveToken: () => undefined, claim: async () => false,
+        read: async () => ({ claimed: true, limits: { emote_per_minute: 0, ping_per_second: 0, text_per_minute: 0 } }),
+        write: async () => ({ ok: true }),
+      },
     });
     r.on('toast', (t: RoomToast) => gone.push(t));
     return r;
@@ -855,6 +866,219 @@ describe('internet over a shared transport', () => {
     expect(net.starts - net.stops).toBe(0);
     expect(net.started).toBeNull();
     expect(inet.state().internet).toBe('off');
+  });
+});
+
+describe('RoomManager room policy', () => {
+  let tokens: Record<string, string>;
+  let limits: RoomPolicy;
+  let service: RoomPolicyService;
+  let net: FakeTransport;
+  let debug: string[];
+
+  beforeEach(() => {
+    room.quit();
+    tokens = {};
+    limits = { ...DEFAULT_ROOM_POLICY };
+    debug = [];
+    net = new FakeTransport('internet');
+    profile.limit = 0;
+    service = {
+      token: (topic) => tokens[topic],
+      saveToken: (topic, token) => { if (token === null) delete tokens[topic]; else tokens[topic] = token; },
+      claim: async () => true,
+      read: async () => ({ claimed: true, limits: { ...limits } }),
+      write: async (_topic, _token, next) => { limits = { ...next }; return { ok: true }; },
+    };
+    room = new RoomManager({
+      transports: [lan, net], now: Date.now, randomBytes: (n) => new Uint8Array(n).fill(0xab),
+      deriveKeys: async () => KEYS, appVersion: '0.6.1', profile: () => profile,
+      resolveTarget: () => ({ displayId: 1, width: 100, height: 100 }), announceEmotes: () => [],
+      policy: service, debug: (line) => debug.push(line),
+    });
+    room.on('remotePing', (p: RemotePing) => pings.push(p));
+    room.on('remoteEmote', (p: RemoteEmote) => emotes.push(p));
+    room.on('remoteText', (p: RemoteText) => texts.push(p));
+  });
+
+  it('saves a fresh owner token on create, verifies it with the server and keeps it on leave and rejoin', async () => {
+    const claims: string[] = [];
+    service.claim = async (_topic, token) => { claims.push(token); return true; };
+    await room.create();
+    const code = room.state().code;
+    expect(tokens[KEYS.relayTopic]).toMatch(/^[0-9a-f]{32}$/);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(room.state().policy.owner).toBe(true);
+    room.leave();
+    expect(tokens[KEYS.relayTopic]).toBe(claims[0]);
+    expect(await room.join(code ?? '')).toEqual({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(claims).toEqual([tokens[KEYS.relayTopic], tokens[KEYS.relayTopic]]);
+    expect(room.state().policy.owner).toBe(true);
+  });
+
+  it('does not claim a room joined without a saved token and refuses local edits', async () => {
+    let claims = 0;
+    service.claim = async () => { claims++; return true; };
+    await joinActive();
+    expect(claims).toBe(0);
+    expect(room.state().policy).toMatchObject({ claimed: true, owner: false, available: true });
+    expect(await room.setPolicy(DEFAULT_ROOM_POLICY)).toEqual({ ok: false, error: 'notOwner' });
+  });
+
+  it('forgets a token when a competing creator won and keeps it when the server is offline', async () => {
+    service.claim = async () => false;
+    await room.create();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tokens).toEqual({});
+    expect(room.state().policy.owner).toBe(false);
+    room.leave();
+    service.claim = async () => { throw new Error('offline'); };
+    await room.create();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tokens[KEYS.relayTopic]).toMatch(/^[0-9a-f]{32}$/);
+    expect(room.state().policy).toMatchObject({ limits: DEFAULT_ROOM_POLICY, available: false, owner: false });
+  });
+
+  it('joins with defaults while the policy request is pending or has failed', async () => {
+    service.read = () => new Promise(() => undefined);
+    await joinActive();
+    expect(room.state().phase).toBe('active');
+    expect(room.state().policy.limits).toEqual(DEFAULT_ROOM_POLICY);
+    room.leave();
+    service.read = async () => { throw new Error('offline'); };
+    await joinActive();
+    expect(room.state().policy.available).toBe(false);
+    expect(debug).toContain('Room policy unavailable; using built-in quotas');
+  });
+
+  it('drops the twenty-first emote per sender and admits it when the sliding minute expires', async () => {
+    await joinActive();
+    const a = new SignedRemote(1, 'lan:a', lan);
+    const b = new SignedRemote(2, 'lan:b', lan);
+    a.presence();
+    b.presence();
+    for (let i = 0; i < 21; i++) a.emote();
+    expect(emotes).toHaveLength(20);
+    b.emote();
+    expect(emotes).toHaveLength(21);
+    expect(debug.some((line) => line.includes('dropped emote'))).toBe(true);
+    await vi.advanceTimersByTimeAsync(59_999);
+    a.presence();
+    a.emote();
+    expect(emotes).toHaveLength(21);
+    await vi.advanceTimersByTimeAsync(1);
+    a.emote();
+    expect(emotes).toHaveLength(22);
+  });
+
+  it('blocks the local twenty-first emote before publishing and keeps another sender independent', async () => {
+    await joinActive();
+    const a = new SignedRemote(1, 'lan:a', lan);
+    a.presence();
+    lan.sent = [];
+    const accepted = Array.from({ length: 21 }, () => room.sendEmote('gg', { d: 1, x: 0, y: 0 }));
+    expect(accepted.filter(Boolean)).toHaveLength(20);
+    expect(sentMessages('lan:a').filter((m) => m.t === 'emote')).toHaveLength(20);
+    a.emote();
+    expect(emotes).toHaveLength(1);
+  });
+
+  it('counts pings by a sliding second and shares the text minute with alive lines', async () => {
+    await joinActive();
+    const a = new SignedRemote(1, 'lan:a', lan);
+    a.presence();
+    for (let i = 0; i < 6; i++) a.ping();
+    expect(pings).toHaveLength(5);
+    await vi.advanceTimersByTimeAsync(999);
+    a.ping();
+    expect(pings).toHaveLength(5);
+    await vi.advanceTimersByTimeAsync(1);
+    a.ping();
+    expect(pings).toHaveLength(6);
+    for (let i = 0; i < 10; i++) a.text();
+    a.alive();
+    expect(texts).toHaveLength(10);
+  });
+
+  it('counts duplicate packets once before checking the quota on another route', async () => {
+    limits.emote_per_minute = 2;
+    await joinActive();
+    const a = new SignedRemote(1, 'lan:a', lan);
+    a.presence();
+    const packet = a.packet({ t: 'emote', e: 'gg', d: 1, x: 0, y: 0 });
+    lan.deliver('lan:a', packet);
+    net.emit('packet', 'net:a', packet, 'emote');
+    net.emit('packet', 'net:a', a.packet({ t: 'emote', e: 'gg', d: 1, x: 0, y: 0 }), 'emote');
+    a.emote();
+    expect(emotes).toHaveLength(2);
+  });
+
+  it('uses the relay public key for unsigned peers and treats missing tags as pings', async () => {
+    limits.ping_per_second = 2;
+    limits.emote_per_minute = 1;
+    await joinActive();
+    const a = new Remote('1111111111111111', 'net:pubkey', net);
+    const b = new Remote('2222222222222222', 'net:pubkey', net);
+    a.presence();
+    b.presence();
+    a.emote();
+    b.emote();
+    a.emote();
+    expect(emotes).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    a.emote();
+    expect(emotes).toHaveLength(3);
+  });
+
+  it.each(['ping', 'text', 'vote'])('rejects a conflicting %s label that would bypass an emote quota', async (type) => {
+    await joinActive();
+    const a = new SignedRemote(1, 'net:a', net);
+    a.presence();
+    net.emit('packet', 'net:a', a.packet({ t: 'emote', e: 'gg', d: 1, x: 0, y: 0 }), type);
+    expect(emotes).toHaveLength(0);
+  });
+
+  it('allows zero quotas and applies a smaller saved quota to later messages without clearing the window', async () => {
+    await room.create();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await room.setPolicy({ emote_per_minute: 0, ping_per_second: 0, text_per_minute: 0 })).toEqual({ ok: true });
+    for (let i = 0; i < 100; i++) expect(room.sendText('hello', { d: 1, x: 0, y: 0 })).toBe(true);
+    await room.setPolicy(DEFAULT_ROOM_POLICY);
+    expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
+    expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
+    expect(await room.setPolicy({ ...DEFAULT_ROOM_POLICY, emote_per_minute: 1 })).toEqual({ ok: true });
+    expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(false);
+    expect(await room.setPolicy({ ...DEFAULT_ROOM_POLICY, emote_per_minute: -1 })).toEqual({ ok: false, error: 'invalid' });
+  });
+
+  it('refreshes while in the room, falls back on failure, and makes no requests with internet off', async () => {
+    await joinActive();
+    limits.emote_per_minute = 3;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(room.state().policy.limits.emote_per_minute).toBe(3);
+    service.read = async () => { throw new Error('offline'); };
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(room.state().policy.limits).toEqual(DEFAULT_ROOM_POLICY);
+    let reads = 0;
+    service.read = async () => { reads++; return { claimed: true, limits }; };
+    room.setInternetAllowed(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(reads).toBe(0);
+    room.setInternetAllowed(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(1);
+  });
+
+  it('ignores a late policy response after leaving the room', async () => {
+    let finish: ((result: { claimed: boolean; limits: RoomPolicy }) => void) | undefined;
+    service.read = () => new Promise((resolve) => { finish = resolve; });
+    await joinActive();
+    room.leave();
+    finish?.({ claimed: true, limits: { ...DEFAULT_ROOM_POLICY, emote_per_minute: 1 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(room.state().phase).toBe('idle');
+    expect(room.state().policy).toMatchObject({ available: false, limits: DEFAULT_ROOM_POLICY });
   });
 });
 

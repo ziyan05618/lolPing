@@ -107,6 +107,7 @@
         <thead><tr><th>房间</th><th class="r">在线</th><th class="r">累计事件</th><th class="r">最近</th></tr></thead>
         <tbody id="rooms"></tbody>
       </table>
+      <div id="room-policy"></div>
 
       <h2 style="margin-top:34px">已封禁</h2>
       <table>
@@ -123,6 +124,7 @@
   </div>
 </div>
 
+<script src="room-policy.js"></script>
 <script>
 const DEMO = {
   overview: { online: 3, unique_ips_online: 3, rooms_online: 1, uptime_s: 1077, events_this_minute: 42,
@@ -211,6 +213,7 @@ async function render() {
         <td class="mono">${r.room}</td><td class="r">${r.online}</td>
         <td class="r">${r.events}</td><td class="r muted">${fmtDur(Date.now() / 1000 - r.last_seen)}前</td>
       </tr>`).join('');
+  roomPolicyPanel.render('room-policy', rooms, render, TOKEN);
 
   document.getElementById('bans').innerHTML = bans.length === 0
     ? '<tr><td colspan="4" class="none">没有封禁记录。</td></tr>'

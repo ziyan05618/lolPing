@@ -107,6 +107,7 @@ export class OverlayManager extends EventEmitter {
   private wheelAt: { local: LocalPoint; phys: { x: number; y: number } } | null = null;
   private mateTicket: string | null = null;
   private captureExcluded = false;
+  private sharing: { ping(p: SharedPing): boolean; emote(p: SharedEmote): boolean } | null = null;
   /** Overlays whose page last said it has nothing on it, parked off their displays (Windows only). */
   private readonly idleWindows = new WeakSet<BrowserWindow>();
 
@@ -125,17 +126,14 @@ export class OverlayManager extends EventEmitter {
       if (!p || !isPingId(p.id) || !isNum(p.x) || !isNum(p.y)) return;
       const displayId = this.displayOf(event.sender);
       if (displayId === undefined) return;
-      this.emit('shared', { id: p.id, displayId, x: p.x, y: p.y } satisfies SharedPing);
-      this.unkeepElsewhere(displayId); // the wheel's own overlay already swapped its kept ping for this one
+      this.placeOwnPing(p.id, { displayId, x: p.x, y: p.y });
     });
     ipcMain.on(OVERLAY_EMOTED, (event, raw: unknown) => {
       const p = raw as { ref?: unknown; x?: unknown; y?: unknown } | null;
       if (!p || !isEmoteRefShape(p.ref) || !isNum(p.x) || !isNum(p.y)) return;
       const displayId = this.displayOf(event.sender);
       if (displayId === undefined) return;
-      this.emit('sharedEmote', { ref: p.ref, displayId, x: p.x, y: p.y } satisfies SharedEmote);
-      // The wheel's own overlay already shows it. Another display may still hold an earlier one of ours.
-      this.clearElsewhere(displayId, 'self');
+      this.placeOwnEmote(p.ref, { displayId, x: p.x, y: p.y });
     });
     ipcMain.on(OVERLAY_IDLE, (event, idle: unknown) => {
       // Screenshot tools on Windows take a shown overlay for a window over the whole display (#127): park an empty one.
@@ -207,10 +205,7 @@ export class OverlayManager extends EventEmitter {
           break;
         }
         if (ev.wheel === 'emote') {
-          const ref = this.settings.clickEmoteId;
-          this.send(p.displayId, 'emote:spawn', { owner: 'self', art: this.resolveArt(ref, false), x: p.x, y: p.y });
-          this.clearElsewhere(p.displayId, 'self');
-          this.emit('sharedEmote', { ref, displayId: p.displayId, x: p.x, y: p.y } satisfies SharedEmote);
+          this.placeOwnEmote(this.settings.clickEmoteId, p);
           break;
         }
         this.placeOwnPing(this.settings.clickPingId, p);
@@ -374,10 +369,25 @@ export class OverlayManager extends EventEmitter {
 
   /** Our own ping placed from here, kept if that setting is on, and shared with the room. */
   private placeOwnPing(id: PingId, p: LocalPoint): void {
+    const shared: SharedPing = { id, displayId: p.displayId, x: p.x, y: p.y };
+    if (this.sharing && !this.sharing.ping(shared)) return;
     const keep = this.settings.keepLastPing ? { keep: true } : {};
     this.send(p.displayId, 'ping:spawn', { id, x: p.x, y: p.y, ...keep });
     this.unkeepElsewhere(p.displayId);
-    this.emit('shared', { id, displayId: p.displayId, x: p.x, y: p.y } satisfies SharedPing);
+    this.emit('shared', shared);
+  }
+
+  /** Main checks the room quota before any local animation or sound starts. Previews never take this path. */
+  setSharing(sharing: { ping(p: SharedPing): boolean; emote(p: SharedEmote): boolean }): void {
+    this.sharing = sharing;
+  }
+
+  private placeOwnEmote(ref: EmoteRef, p: LocalPoint): void {
+    const shared: SharedEmote = { ref, displayId: p.displayId, x: p.x, y: p.y };
+    if (this.sharing && !this.sharing.emote(shared)) return;
+    this.send(p.displayId, 'emote:spawn', { owner: 'self', art: this.resolveArt(ref, false), x: p.x, y: p.y });
+    this.clearElsewhere(p.displayId, 'self');
+    this.emit('sharedEmote', shared);
   }
 
   /** The slice is worked out here from the same geometry the wheel draws, so the overlay has nothing to report. */

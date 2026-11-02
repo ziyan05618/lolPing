@@ -1,5 +1,6 @@
 import type { TagRgb } from './roomColors';
 import type { MemberStatus } from './roomProtocol';
+import type { RoomPolicyState } from './roomPolicy';
 
 export type TransportStatus = 'off' | 'starting' | 'ok' | 'unavailable';
 export type MemberPath = 'lan' | 'internet' | 'connecting' | 'unreachable';
@@ -42,6 +43,7 @@ export interface RoomStateCore {
    * or old packets replayed. Only a hint: such packets never add a member.
    */
   clockSkew: boolean;
+  policy: RoomPolicyState;
 }
 
 /** What the settings window shows: the room plus this machine's display numbers. */

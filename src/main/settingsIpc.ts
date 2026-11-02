@@ -9,6 +9,7 @@ import { hotkeyLabel, hotkeyToAccelerator, type Hotkey } from '../shared/keys';
 import { pingById, type PingId } from '../shared/pings';
 import type { Platform } from '../shared/platform';
 import type { JoinResult, RoomState } from '../shared/room';
+import { parseRoomPolicy, type RoomPolicyResult } from '../shared/roomPolicy';
 import { askKeyClashes, panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
 import { AGENT_PRESETS } from '../shared/teammate/agents';
 import { CONNECT_APPS, connectSnippet, mcpAddLine, type BridgeCommand } from '../shared/teammate/connectApps';
@@ -58,6 +59,7 @@ export interface SettingsIpcDeps {
     clipboardCode(): Promise<string | null>;
     copyCode(): void;
     retryInternet(): void;
+    setPolicy(policy: unknown): Promise<RoomPolicyResult>;
   };
   teammate: {
     /** null while the teammate feature is off: then no key or instructions are read or stored. */
@@ -182,14 +184,15 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
   ipcMain.handle(SETTINGS_CH.openFolder, async () => {
     await shell.openPath(d.store.dir);
   });
-  ipcMain.handle(SETTINGS_CH.openProject, async () => {
-    await shell.openExternal(PROJECT_URL);
-  });
   ipcMain.handle(SETTINGS_CH.retryHelper, () => d.retryHelper());
   ipcMain.handle(SETTINGS_CH.capture, (_e, on: unknown) => d.setCapturing(on === true));
   ipcMain.handle(SETTINGS_CH.openAccessibility, () => d.openAccessibility());
   ipcMain.handle(SETTINGS_CH.roomGet, () => d.room.state());
   ipcMain.handle(SETTINGS_CH.roomCreate, () => d.room.create());
+  ipcMain.handle(SETTINGS_CH.roomSetPolicy, (_e, raw: unknown): Promise<RoomPolicyResult> => {
+    const policy = parseRoomPolicy(raw);
+    return policy ? d.room.setPolicy(policy) : Promise.resolve({ ok: false, error: 'invalid' });
+  });
   ipcMain.handle(SETTINGS_CH.roomJoin, (_e, text: unknown): Promise<JoinResult> | JoinResult =>
     typeof text === 'string' ? d.room.join(text) : { ok: false, error: 'invalid' });
   ipcMain.handle(SETTINGS_CH.roomLeave, () => d.room.leave());

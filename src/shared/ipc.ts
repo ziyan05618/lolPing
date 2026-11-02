@@ -290,6 +290,7 @@ export interface SettingsApi {
   copyRoomCode(): Promise<void>;
   /** Reconnects to every relay now (the Room page's Retry). */
   retryInternet(): Promise<void>;
+  setRoomPolicy(policy: import('./roomPolicy').RoomPolicy): Promise<import('./roomPolicy').RoomPolicyResult>;
   /** The main process asks to scroll to a section (e.g. tray → Room settings…). */
   onShowSection(cb: (id: string) => void): () => void;
   /** Where the update checker is, or null when this build has none (a development build): then the page shows no update controls. */

@@ -10,6 +10,7 @@ import { hotkeyParts, vkLabel } from '../../../shared/keys';
 import type { RoomMember, RoomState } from '../../../shared/room';
 import { TAG_COLORS, readableTagRgb, tagColorCss, tagHex, tagRgbFromHex } from '../../../shared/roomColors';
 import { clampNameInput } from '../../../shared/roomProtocol';
+import { parseRoomPolicy, ROOM_POLICY_KEYS, ROOM_POLICY_MAX } from '../../../shared/roomPolicy';
 import { LIMITS, type RoomTextStyle, type Settings } from '../../../shared/settings';
 import { api } from '../api';
 import { useText } from '../text';
@@ -109,6 +110,54 @@ function MemberRow({ m }: { m: RoomMember }) {
   );
 }
 
+export function RoomPolicyControls({ room }: { room: RoomState }) {
+  const t = useText().roomPolicy;
+  const { limits, owner, available, claimed } = room.policy;
+  const [draft, setDraft] = useState(() => Object.fromEntries(ROOM_POLICY_KEYS.map((k) => [k, String(limits[k])])));
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<keyof Pick<typeof t, 'invalid' | 'notOwner' | 'unavailable' | 'saved'> | null>(null);
+  useEffect(() => {
+    setDraft(Object.fromEntries(ROOM_POLICY_KEYS.map((k) => [k, String(limits[k])])));
+  }, [limits.emote_per_minute, limits.ping_per_second, limits.text_per_minute]);
+  const save = async () => {
+    const values = Object.fromEntries(ROOM_POLICY_KEYS.map((k) => [k, /^\d+$/.test(draft[k]) ? Number(draft[k]) : NaN]));
+    const policy = parseRoomPolicy(values);
+    if (!policy) { setNotice('invalid'); return; }
+    setBusy(true);
+    try {
+      const result = await api.setRoomPolicy(policy);
+      setNotice(result.ok ? 'saved' : result.error);
+    } catch {
+      setNotice('unavailable');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div>
+      <SettingRow icon={<TopSpeed24Regular />} title={t.title}
+        description={!available ? t.defaults : owner ? t.editor : claimed ? t.readOnly : t.unclaimed}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          {ROOM_POLICY_KEYS.map((key) => (
+            <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span>{t[key]}</span>
+              {owner ? (
+                <Input type="number" min={0} max={ROOM_POLICY_MAX} step={1} value={draft[key]} disabled={busy}
+                  aria-label={t[key]} style={{ width: 115 }} onChange={(_, d) => {
+                    setDraft((prev) => ({ ...prev, [key]: d.value }));
+                    setNotice(null);
+                  }} />
+              ) : <span>{limits[key] === 0 ? t.unlimited : limits[key]}</span>}
+            </label>
+          ))}
+          {owner ? <Button disabled={busy} onClick={() => void save()}>{t.save}</Button> : null}
+        </div>
+      </SettingRow>
+      {notice ? <p role="status" className="desc roomNote">{t[notice]}</p> : null}
+    </div>
+  );
+}
+
 function InRoom({ room, allowInternet }: { room: RoomState; allowInternet: boolean }) {
   const t = useText();
   const [copied, setCopied] = useState(false);
@@ -166,6 +215,7 @@ function InRoom({ room, allowInternet }: { room: RoomState; allowInternet: boole
         ) : null}
         {room.clockSkew ? <div className="desc roomWaiting warnText">{t.roomClockSkew}</div> : null}
       </div>
+      <RoomPolicyControls key={room.code} room={room} />
     </>
   );
 }

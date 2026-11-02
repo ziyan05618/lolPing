@@ -16,7 +16,7 @@ import { EMOTE_CATALOG } from '../../src/shared/emoteCatalog';
 import { ALL_PINGS } from '../../src/shared/pings';
 import { parseRoomCode } from '../../src/shared/roomCode';
 import {
-  decodeMessage, encodeMessage, joinSigned, MAX_TEXT, PEER_RE, PROTOCOL_VERSION, sanitizeText, type RoomFeatureOff, type RoomMessage,
+  decodeMessage, encodeMessage, joinSigned, MAX_TEXT, PEER_RE, PROTOCOL_VERSION, roomEventType, sanitizeText, type RoomFeatureOff, type RoomMessage,
 } from '../../src/shared/roomProtocol';
 import { VOTE_MS } from '../../src/shared/voteTally';
 
@@ -182,12 +182,13 @@ const spot = (): [number, number] => [0.1 + Math.random() * 0.8, 0.1 + Math.rand
 // Text, alive lines, votes and ballots go to the room within the relay cap, as in the app.
 function sendSpaced(body: Record<string, unknown>, what: string): void {
   if (values.relay && !relayCap.allow('internet', RELAY_PING_RATE, RELAY_PING_BURST)) return;
-  transport.broadcast(packet(body));
+  const type = !values.legacy && typeof body.t === 'string' ? roomEventType(body.t) : undefined;
+  transport.broadcast(packet(body), type);
   console.log(`[out] ${what}`);
 }
 const sendEmote = (e: string): void => {
   const [x, y] = spot();
-  transport.broadcast(packet({ t: 'emote', e, d: Number(values.display), x, y }));
+  transport.broadcast(packet({ t: 'emote', e, d: Number(values.display), x, y }), values.legacy ? undefined : 'emote');
   console.log(`[out] emote ${e} at ${x.toFixed(2)}, ${y.toFixed(2)}`);
 };
 if (rate > 0) {
@@ -197,7 +198,7 @@ if (rate > 0) {
     if (values.emotes && n++ % 2) return sendEmote(EMOTE_CATALOG[Math.floor(Math.random() * EMOTE_CATALOG.length)].slug);
     const ping = ALL_PINGS[Math.floor(Math.random() * ALL_PINGS.length)].id;
     const [x, y] = spot();
-    transport.broadcast(packet({ t: 'ping', ping, d: Number(values.display), x, y }));
+    transport.broadcast(packet({ t: 'ping', ping, d: Number(values.display), x, y }), values.legacy ? undefined : 'ping');
     console.log(`[out] ${ping} at ${x.toFixed(2)}, ${y.toFixed(2)}`);
   }, 1000 / rate);
   // Our --image, or a made-up custom emote: the app has no such image, so it shows the placeholder.

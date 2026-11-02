@@ -247,7 +247,8 @@ def handle_message(client: Client, raw: bytes) -> None:
             return
         fanout = broadcast(event)
         if client.session is not None:
-            TRACKER.on_event_in(client.session, len(raw))
+            event_type = next((tag[1] for tag in event["tags"] if len(tag) > 1 and tag[0] == "t"), "ping")
+            TRACKER.on_event_in(client.session, len(raw), event_type)
         client.send(["OK", event["id"], True, ""])
         return
 
@@ -261,6 +262,12 @@ def handle_message(client: Client, raw: bytes) -> None:
             client.send(["CLOSED", sub_id, "error: too many subscriptions"])
             return
         client.subs[sub_id] = filters
+        for filt in filters:
+            topics = filt.get("#x", [])
+            if isinstance(topics, list):
+                for topic in topics:
+                    if isinstance(topic, str):
+                        TRACKER.touch_room(topic)
         # Nothing is stored, so there is never a backlog: EOSE goes out immediately.
         client.send(["EOSE", sub_id])
         return

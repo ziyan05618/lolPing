@@ -4,6 +4,25 @@ import { isTagColor, isTagRgb, type TagRgb } from './roomColors';
 
 /** Bumped when room messages change incompatibly. Peers on another version are shown as "needs update". */
 export const PROTOCOL_VERSION = 1;
+export type RoomEventType = 'ping' | 'emote' | 'text' | 'vote';
+
+/** Only message classes are public; presence and image transfers keep no type tag. */
+export function roomEventType(type: string): RoomEventType | undefined {
+  if (type === 'ping' || type === 'emote' || type === 'text' || type === 'vote') return type;
+  if (type === 'alive') return 'text';
+  if (type === 'ballot') return 'vote';
+  return undefined;
+}
+
+export function roomEventTags(topic: string, type?: RoomEventType): string[][] {
+  return [['x', topic], ...(type ? [['t', type]] : [])];
+}
+
+/** Absence stays distinct so main can apply the legacy ping quota without trusting a conflicting label. */
+export function taggedRoomEventType(tags: readonly string[][]): RoomEventType | undefined {
+  const value = tags.find((tag) => tag[0] === 't')?.[1];
+  return value === 'ping' || value === 'emote' || value === 'text' || value === 'vote' ? value : undefined;
+}
 export const MAX_NAME = 16;
 /** The first app version that sends and shows room text, alive lines and votes. */
 export const ROOM_CHAT_SINCE = '0.5.2';

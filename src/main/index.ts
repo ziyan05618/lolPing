@@ -48,6 +48,7 @@ import { deriveRoomKeys } from './roomCrypto';
 import { RoomHistory } from './roomHistory';
 import { PanelWindows } from './panelWindows';
 import { MAX_MEMBERS, RoomManager, type RoomToast } from './roomManager';
+import { RoomPolicyClient } from './roomPolicyClient';
 import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
 import { registerSettingsIpc } from './settingsIpc';
@@ -297,12 +298,26 @@ function start(): void {
   // Room: pings shared with other lolPing users, on the network and through public relays.
   const lan = new LanTransport();
   const relay = new RelayTransport({ urls: relayUrls() });
+  const policyClient = new RoomPolicyClient();
   const room = new RoomManager({
     transports: [lan, relay],
     now: Date.now,
     randomBytes: (n) => randomBytes(n),
     deriveKeys: deriveRoomKeys,
     appVersion: app.getVersion(),
+    policy: {
+      token: (topic) => store.get().ownerTokens[topic],
+      saveToken: (topic, token) => {
+        const ownerTokens = { ...store.get().ownerTokens };
+        if (token === null) delete ownerTokens[topic];
+        else ownerTokens[topic] = token;
+        store.update({ ownerTokens });
+      },
+      claim: (topic, token) => policyClient.claim(topic, token),
+      read: (topic) => policyClient.read(topic),
+      write: (topic, token, policy) => policyClient.write(topic, token, policy),
+    },
+    debug: (line) => console.debug('[rooms]', line),
     profile: () => ({
       name: settings.displayName, ...tagWire(settings.tagColor, settings.tagColorCustom), limit: settings.incomingPingLimit,
       nf: roomFeaturesOff(settings),
@@ -464,18 +479,19 @@ function start(): void {
   });
   overlays.on('displays', pushRoom);
   room.on('remotePing', (p) => overlays.spawnRemote(p));
-  overlays.on('shared', (p: SharedPing) => {
-    const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
-    if (shared) room.sendPing(p.id, shared);
+  overlays.setSharing({
+    ping: (p: SharedPing) => {
+      const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
+      return shared !== null && room.sendPing(p.id, shared);
+    },
+    emote: (p: SharedEmote) => {
+      const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
+      const fx = settings.customEmotes.find((c) => c.id === p.ref)?.fx;
+      return shared !== null && room.sendEmote(p.ref, shared, fx);
+    },
   });
   room.on('remoteEmote', (p) => {
     if (featureOn(settings, 'emotes')) overlays.spawnRemoteEmote(p);
-  });
-  overlays.on('sharedEmote', (p: SharedEmote) => {
-    const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
-    // The effect rides on the message, so friends see the one its sender picked even before they have the image.
-    const fx = settings.customEmotes.find((c) => c.id === p.ref)?.fx;
-    if (shared) room.sendEmote(p.ref, shared, fx);
   });
   // This session's room lines: members' text and alive lines while the text feature is on, and our own.
   const history = new RoomHistory(() => refreshRoster());
@@ -659,16 +675,16 @@ function start(): void {
   /** Shows our own text where the box was opened, and sends it to the room. */
   const sendOwnText = (message: string, at: { x: number; y: number }): void => {
     const { shared, ...spot } = ownSpot(at);
+    if (!shared || !room.sendText(message, shared)) return;
     postLine(lineDeps, { kind: 'text', owner: 'self', tag: ownTag(), ...spot, text: message });
-    if (shared) room.sendText(message, shared);
   };
   /** "<name> - Alive" for the member whose name tag was clicked in the panel, shown here and sent to the room. */
   const sendOwnAlive = (peer: string, at: { x: number; y: number }): void => {
     const who = room.state().members.find((m) => m.peer === peer);
     if (!who || !featureOn(settings, 'roomText')) return;
     const { shared, ...spot } = ownSpot(at);
+    if (!shared || !room.sendAlive(peer, shared)) return;
     postLine(lineDeps, { kind: 'alive', owner: 'self', tag: ownTag(), ...spot, text: text().aliveLine(who.name) });
-    if (shared) room.sendAlive(peer, shared);
   };
   registerTextWindow((raw, at) => {
     const input = parseTextInput(raw);
@@ -1189,6 +1205,7 @@ function start(): void {
       clipboardCode,
       copyCode: copyRoomCode,
       retryInternet: () => relay.retryNow(),
+      setPolicy: (policy) => room.setPolicy(policy),
     },
     teammate: {
       secrets: () => mate?.secrets ?? null,

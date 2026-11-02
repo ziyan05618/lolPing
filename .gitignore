@@ -4,6 +4,8 @@ dist/
 release/
 site-dist/
 native/hook-helper/build/
+server/relay/admin/room-policy.js
+server/relay/__pycache__/
 *.log
 .DS_Store
 tools/extract-assets/.cache/
@@ -13,3 +15,7 @@ tools/extract-assets/__pycache__/
 .superpowers/
 docs/superpowers/
 docs/fix/
+
+# build directories parked aside by the safe-delete guard
+out.old.*/
+release.old.*/

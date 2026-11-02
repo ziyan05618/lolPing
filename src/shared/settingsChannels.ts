@@ -26,6 +26,7 @@ export const SETTINGS_CH = {
   roomClipboard: 'room:clipboardCode',
   roomCopy: 'room:copyCode',
   roomRetryInternet: 'room:retryInternet',
+  roomSetPolicy: 'room:setPolicy',
   updateGet: 'update:get',
   updateState: 'update:state',
   updateCheck: 'update:check',
