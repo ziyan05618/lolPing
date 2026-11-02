@@ -260,6 +260,15 @@ class Tracker:
             db.execute("UPDATE room_owner SET last_seen = ? WHERE topic = ?", (now, topic))
         return {"topic": topic, "claimed": True, **dict(zip(DEFAULT_POLICY, row))}
 
+    def is_owner(self, topic: str, token: str) -> bool:
+        """Whether this token owns the topic. Checked before the payload is validated, so someone who does not own
+        the room never learns which quota values would have been accepted."""
+        db = self._policy_db()
+        with db:
+            self._expire_owners(db, int(self.now()))
+            row = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
+        return row is not None and secrets.compare_digest(row[0], token)
+
     def write_policy(self, topic: str, token: str, policy: dict[str, int]) -> bool:
         db = self._policy_db()
         now = int(self.now())
@@ -516,13 +525,16 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             if method == "POST" and path == "/claim":
                 writer.write(_json(200, {"ok": True, "owner": tracker.claim(topic, token)}))
             elif method == "POST" and path == "/policy":
-                policy = {key: payload.get(key) for key in DEFAULT_POLICY}
-                if any(type(v) is not int or v < 0 or v > 600 for v in policy.values()):
-                    writer.write(_json(400, {"error": "quotas must be integers from 0 to 600"}))
-                elif tracker.write_policy(topic, token, policy):
-                    writer.write(_json(200, {"ok": True}))
-                else:
+                if not tracker.is_owner(topic, token):
                     writer.write(_json(403, {"error": "not owner"}))
+                else:
+                    policy = {key: payload.get(key) for key in DEFAULT_POLICY}
+                    if any(type(v) is not int or v < 0 or v > 600 for v in policy.values()):
+                        writer.write(_json(400, {"error": "quotas must be integers from 0 to 600"}))
+                    elif tracker.write_policy(topic, token, policy):
+                        writer.write(_json(200, {"ok": True}))
+                    else:
+                        writer.write(_json(403, {"error": "not owner"}))
             else:
                 writer.write(_json(405, {"error": "method not allowed"}))
             return
