@@ -46,6 +46,12 @@ class RoomPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def claim(self, token=TOKEN):
         return await self.request("/claim", {"topic": TOPIC, "token": token})
 
+    async def heartbeat(self, token):
+        return await self.request("/heartbeat", {"topic": TOPIC, "member_token": token})
+
+    async def leave_member(self, token):
+        return await self.request("/leave", {"topic": TOPIC, "member_token": token})
+
     async def test_claim_is_idempotent_and_first_writer_wins(self):
         self.assertEqual(await self.claim(), (200, {"ok": True, "owner": True}))
         self.now += 30
@@ -64,6 +70,52 @@ class RoomPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.tracker._conn.execute("SELECT COUNT(*) FROM room_policy").fetchone()[0], 1)
         finally:
             second._conn.close()
+
+    async def test_heartbeat_registers_members_and_reassigns_owner_on_leave(self):
+        self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], True)
+        self.now += 1
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], False)
+        self.assertEqual((await self.heartbeat(OTHER))[1]["claimed"], True)
+        self.assertEqual(await self.request("/policy", {"topic": TOPIC, "token": TOKEN,
+                                                          **{**admin.DEFAULT_POLICY, "emote_per_minute": 7}}),
+                         (200, {"ok": True}))
+        self.assertEqual(await self.leave_member(TOKEN), (200, {"ok": True}))
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], True)
+        self.assertEqual((await self.request(f"/policy/{TOPIC}"))[1]["emote_per_minute"], 7)
+
+    async def test_timeout_transfers_to_oldest_active_member_and_late_owner_stays_non_owner(self):
+        self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], True)
+        self.now += 10
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], False)
+        self.now += 46
+        result = await self.heartbeat(OTHER)
+        self.assertEqual(result[1]["owner"], True)
+        self.now += 1
+        self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], False)
+
+    async def test_no_active_member_clears_claim_and_next_heartbeat_claims_room(self):
+        self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], True)
+        self.now += 46
+        result = await self.heartbeat(OTHER)
+        self.assertEqual(result[1]["owner"], True)
+        self.assertEqual(result[1]["claimed"], True)
+
+    async def test_member_join_order_is_stable_within_the_same_second(self):
+        self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], True)
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], False)
+        earlier_lexically = "01" * 16
+        self.assertEqual((await self.heartbeat(earlier_lexically))[1]["owner"], False)
+        self.assertEqual(await self.leave_member(TOKEN), (200, {"ok": True}))
+        self.assertEqual((await self.heartbeat(earlier_lexically))[1]["owner"], False)
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], True)
+
+    async def test_admin_clear_claim_also_clears_member_rows(self):
+        self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], True)
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], False)
+        self.assertEqual(self.tracker.clear_claim(admin.room_label(TOPIC)), {"ok": True, "cleared": 1})
+        rows = self.tracker._policy_db().execute("SELECT member_token FROM room_member WHERE topic=?", (TOPIC,)).fetchall()
+        self.assertEqual(rows, [])
+        self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], True)
 
     async def test_only_owner_can_update_and_reads_contain_only_public_fields(self):
         await self.claim()

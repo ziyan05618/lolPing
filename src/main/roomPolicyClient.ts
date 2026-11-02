@@ -11,6 +11,8 @@ export interface RoomPolicyService {
   claim(topic: string, token: string): Promise<boolean>;
   read(topic: string): Promise<{ claimed: boolean; limits: RoomPolicy }>;
   write(topic: string, token: string, policy: RoomPolicy): Promise<RoomPolicyResult>;
+  heartbeat?(topic: string, memberToken: string): Promise<{ owner: boolean; claimed: boolean; limits: RoomPolicy }>;
+  leave?(topic: string, memberToken: string): Promise<boolean>;
 }
 
 /** Requests contain only the room topic, quotas and, for writes, this machine's owner token. */
@@ -57,7 +59,7 @@ export class RoomPolicyClient {
 
   async write(topic: string, token: string, policy: RoomPolicy): Promise<RoomPolicyResult> {
     try {
-      const { status, data } = await this.call('policy', { topic, token, ...policy });
+      const { status, data } = await this.call('policy', { topic, member_token: token, ...policy });
       if (status === 403) return { ok: false, error: 'notOwner' };
       if (status === 400) return { ok: false, error: 'invalid' };
       return status === 200 && typeof data === 'object' && data !== null && 'ok' in data && data.ok === true
@@ -65,5 +67,21 @@ export class RoomPolicyClient {
     } catch {
       return { ok: false, error: 'unavailable' };
     }
+  }
+
+  async heartbeat(topic: string, memberToken: string): Promise<{ owner: boolean; claimed: boolean; limits: RoomPolicy }> {
+    const { status, data } = await this.call('heartbeat', { topic, member_token: memberToken });
+    if (status !== 200 || typeof data !== 'object' || data === null) throw new Error('Invalid heartbeat response');
+    const value = data as Record<string, unknown>;
+    const limits = parseRoomPolicy(value.limits);
+    if (typeof value.owner !== 'boolean' || typeof value.claimed !== 'boolean' || !limits) {
+      throw new Error('Invalid heartbeat response');
+    }
+    return { owner: value.owner, claimed: value.claimed, limits };
+  }
+
+  async leave(topic: string, memberToken: string): Promise<boolean> {
+    const { status, data } = await this.call('leave', { topic, member_token: memberToken });
+    return status === 200 && typeof data === 'object' && data !== null && 'ok' in data && data.ok === true;
   }
 }

@@ -24,6 +24,7 @@ const SETTLE_MS = 3000;
 const SETTLE_CAP_MS = 15_000;
 const TICK_MS = 1000;
 const POLICY_REFRESH_MS = 10_000;
+const POLICY_HEARTBEAT_MS = 15_000;
 /** How often presence is re-announced on each transport. */
 const PRESENCE_MS: Record<Transport['kind'], number> = { lan: 2000, internet: 10_000 };
 /** How long a path counts as alive after the last packet over it. */
@@ -110,6 +111,8 @@ export interface RoomDeps {
   /** The 32-hex hashes our presence announces: the custom emotes on our wheel and centre. Read on every presence. */
   announceEmotes(): readonly string[];
   policy?: RoomPolicyService;
+  /** Stable installation token for policy membership heartbeats. */
+  memberToken?: () => string;
   debug?(line: string): void;
 }
 
@@ -196,8 +199,11 @@ export class RoomManager extends EventEmitter {
   };
   private readonly policyWindows = new Map<string, number[]>();
   private policyRequestedAt = -Infinity;
+  private policyHeartbeatAt = -Infinity;
   private policyPending: number | null = null;
   private policyRevision = 0;
+  /** Membership writes share one queue so a late heartbeat cannot undo leave or a fast rejoin. */
+  private policyMembershipTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: RoomDeps) {
     super();
@@ -321,7 +327,7 @@ export class RoomManager extends EventEmitter {
     if (!policy) return { ok: false, error: 'invalid' };
     const service = this.deps.policy;
     const topic = this.keys?.relayTopic;
-    const token = topic && service?.token(topic);
+    const token = topic && (this.deps.memberToken?.() ?? service?.token(topic));
     if (!service || !topic || !token || !this.policyState.owner) return { ok: false, error: 'notOwner' };
     if (!this.internetAllowed) return { ok: false, error: 'unavailable' };
     const session = this.session;
@@ -351,6 +357,26 @@ export class RoomManager extends EventEmitter {
     this.policyPending = session;
     this.policyRequestedAt = this.deps.now();
     try {
+      const memberToken = this.deps.memberToken?.();
+      const heartbeat = service.heartbeat;
+      if (heartbeat && memberToken && this.deps.now() - this.policyHeartbeatAt >= POLICY_HEARTBEAT_MS) {
+        this.policyHeartbeatAt = this.deps.now();
+        const request = this.policyMembershipTail.then(() => heartbeat(topic, memberToken));
+        this.policyMembershipTail = request.then(() => undefined, () => undefined);
+        const result = await request;
+        if (session !== this.session || revision !== this.policyRevision) return;
+        this.policyState = {
+          limits: result.limits, claimed: result.claimed, owner: result.owner, available: true,
+        };
+        this.policyHeartbeatAt = this.deps.now();
+        return;
+      }
+      if (memberToken) {
+        const result = await service.read(topic);
+        if (session !== this.session || revision !== this.policyRevision) return;
+        this.policyState = { ...result, owner: this.policyState.owner && result.claimed, available: true };
+        return;
+      }
       const token = service.token(topic);
       const owner = token ? await service.claim(topic, token) : false;
       if (session !== this.session || revision !== this.policyRevision) return;
@@ -518,7 +544,8 @@ export class RoomManager extends EventEmitter {
     }
     if (session !== this.session) return true; // left while deriving
     this.keys = keys;
-    if (create && this.deps.policy && !this.deps.policy.token(keys.relayTopic)) {
+    // Keep the legacy per-room token for old policy service implementations; new clients use memberToken heartbeats.
+    if (create && this.deps.policy && !this.deps.memberToken && !this.deps.policy.token(keys.relayTopic)) {
       this.deps.policy.saveToken(keys.relayTopic, Buffer.from(this.deps.randomBytes(16)).toString('hex'));
     }
     this.joinedAt = this.lastTick = this.deps.now();
@@ -583,6 +610,7 @@ export class RoomManager extends EventEmitter {
     this.policyRevision++;
     this.policyPending = null;
     this.policyRequestedAt = -Infinity;
+    this.policyHeartbeatAt = -Infinity;
     this.policyState = { limits: { ...DEFAULT_ROOM_POLICY }, claimed: false, owner: false, available: false };
     this.policyWindows.clear();
     this.emitState();
@@ -592,7 +620,8 @@ export class RoomManager extends EventEmitter {
     const now = this.deps.now();
     if (now - this.lastTick > SLEEP_GAP_MS) this.wokeAt = now;
     this.lastTick = now;
-    if (now - this.policyRequestedAt >= POLICY_REFRESH_MS) void this.refreshPolicy();
+    if (now - this.policyRequestedAt >= POLICY_REFRESH_MS
+      || (this.deps.memberToken && now - this.policyHeartbeatAt >= POLICY_HEARTBEAT_MS)) void this.refreshPolicy();
     for (const [key, times] of this.policyWindows) {
       const window = key.endsWith(':ping') ? 1000 : 60_000;
       const live = times.filter((at) => now - at < window);

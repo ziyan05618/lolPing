@@ -10,16 +10,25 @@ import {
 import type { AskTrigger } from '../../src/shared/teammate/settings';
 
 describe('normalizeSettings', () => {
-  it('defaults owner tokens for old settings and retains only valid topic and token entries', () => {
+  it('drops deprecated per-room owner tokens during migration', () => {
     expect(normalizeSettings({}).ownerTokens).toEqual({});
     const tokens = { abc: 'a'.repeat(32), def: 'B'.repeat(32), short: 'abc', invalid: 'g'.repeat(32), number: 5 };
-    expect(normalizeSettings({ ownerTokens: tokens }).ownerTokens).toEqual({ abc: tokens.abc, def: tokens.def });
+    expect(normalizeSettings({ ownerTokens: tokens }).ownerTokens).toEqual({});
     for (const ownerTokens of [[], null, 'token', 20]) expect(normalizeSettings({ ownerTokens }).ownerTokens).toEqual({});
     expect(normalizeSettings({ ownerTokens: { '../topic': 'a'.repeat(32) } }).ownerTokens).toEqual({});
   });
 
+  it('validates the stable member token and defaults it for older settings', () => {
+    expect(normalizeSettings({}).memberToken).toBe('');
+    expect(normalizeSettings({ memberToken: 'A'.repeat(32) }).memberToken).toBe('a'.repeat(32));
+    for (const memberToken of ['short', 'g'.repeat(32), 5, null]) {
+      expect(normalizeSettings({ memberToken }).memberToken).toBe('');
+    }
+  });
+
   it('does not let a renderer replace the owner token store', () => {
-    expect(rendererPatch({ ownerTokens: { abc: 'a'.repeat(32) }, volume: 20 })).toEqual({ volume: 20 });
+    expect(rendererPatch({ ownerTokens: { abc: 'a'.repeat(32) }, memberToken: 'a'.repeat(32), volume: 20 }))
+      .toEqual({ volume: 20 });
   });
   it('loads a 0.5.3 settings file with the teammate off', () => {
     const { teammate: _t, features: _f, ...old } = DEFAULT_SETTINGS;

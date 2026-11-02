@@ -88,6 +88,14 @@ CREATE TABLE IF NOT EXISTS room_policy (
   text_per_minute INTEGER NOT NULL DEFAULT 10,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS room_member (
+  topic        TEXT NOT NULL,
+  member_token TEXT NOT NULL,
+  joined_at    INTEGER NOT NULL,
+  last_seen    INTEGER NOT NULL,
+  PRIMARY KEY (topic, member_token)
+);
+CREATE INDEX IF NOT EXISTS room_member_seen ON room_member(topic, last_seen);
 """
 
 
@@ -224,6 +232,43 @@ class Tracker:
         db.execute("DELETE FROM room_policy WHERE topic IN (SELECT topic FROM room_owner WHERE last_seen <= ?)",
                    (now - OWNER_TTL,))
         db.execute("DELETE FROM room_owner WHERE last_seen <= ?", (now - OWNER_TTL,))
+        db.execute("DELETE FROM room_member WHERE last_seen <= ?", (now - OWNER_TTL,))
+
+    def _policy_limits(self, db: sqlite3.Connection, topic: str) -> dict[str, int]:
+        row = db.execute("SELECT emote_per_minute, ping_per_second, text_per_minute FROM room_policy"
+                         " WHERE topic = ?", (topic,)).fetchone()
+        return dict(zip(DEFAULT_POLICY, row)) if row is not None else dict(DEFAULT_POLICY)
+
+    def _register_member(self, db: sqlite3.Connection, topic: str, token: str, now: int) -> None:
+        joined = db.execute("SELECT joined_at FROM room_member WHERE topic=? AND member_token=?",
+                            (topic, token)).fetchone()
+        if joined is None:
+            latest = db.execute("SELECT MAX(joined_at) FROM room_member WHERE topic=?", (topic,)).fetchone()[0]
+            joined_at = max(int(self.now() * 1000), (latest + 1) if latest is not None else 0)
+            db.execute("INSERT INTO room_member VALUES (?,?,?,?)", (topic, token, joined_at, now))
+        else:
+            db.execute("UPDATE room_member SET last_seen=? WHERE topic=? AND member_token=?", (now, topic, token))
+
+    def _ensure_owner(self, db: sqlite3.Connection, topic: str, now: int) -> None:
+        row = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
+        owner_active = row is not None and db.execute(
+            "SELECT 1 FROM room_member WHERE topic=? AND member_token=? AND last_seen >= ?",
+            (topic, row[0], now - 45)).fetchone() is not None
+        active = db.execute("SELECT member_token FROM room_member WHERE topic = ? AND last_seen >= ?"
+                            " ORDER BY joined_at, member_token", (topic, now - 45)).fetchall()
+        if owner_active:
+            return
+        if active:
+            token = active[0][0]
+            if row is None:
+                db.execute("INSERT INTO room_owner VALUES (?,?,?,?)", (topic, token, now, now))
+            else:
+                db.execute("UPDATE room_owner SET owner_token=?, claimed_at=?, last_seen=? WHERE topic=?",
+                           (token, now, now, topic))
+            db.execute("INSERT OR IGNORE INTO room_policy (topic, updated_at) VALUES (?,?)", (topic, now))
+        elif row is not None:
+            db.execute("DELETE FROM room_policy WHERE topic = ?", (topic,))
+            db.execute("DELETE FROM room_owner WHERE topic = ?", (topic,))
 
     def touch_room(self, topic: str) -> None:
         if not TOPIC_RE.fullmatch(topic) or self._conn is None:
@@ -240,6 +285,7 @@ class Tracker:
             # Taking the write lock before reading makes simultaneous claims first-writer-wins across processes too.
             db.execute("BEGIN IMMEDIATE")
             self._expire_owners(db, now)
+            self._register_member(db, topic, token, now)
             db.execute("INSERT OR IGNORE INTO room_owner VALUES (?,?,?,?)", (topic, token, now, now))
             owner = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
             matches = owner is not None and secrets.compare_digest(owner[0], token)
@@ -247,6 +293,43 @@ class Tracker:
                 db.execute("UPDATE room_owner SET last_seen = ? WHERE topic = ?", (now, topic))
                 db.execute("INSERT OR IGNORE INTO room_policy (topic, updated_at) VALUES (?,?)", (topic, now))
             return matches
+
+    def heartbeat(self, topic: str, token: str) -> dict[str, Any]:
+        db = self._policy_db()
+        now = int(self.now())
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            self._expire_owners(db, now)
+            # Decide from the previously recorded member set before refreshing this caller. An owner returning after
+            # the 45-second grace period must not keep ownership merely by being the next request to arrive.
+            self._ensure_owner(db, topic, now)
+            self._register_member(db, topic, token, now)
+            self._ensure_owner(db, topic, now)
+            owner = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
+            if owner is not None and owner[0] == token:
+                db.execute("UPDATE room_owner SET last_seen=? WHERE topic=?", (now, topic))
+            limits = self._policy_limits(db, topic)
+        return {"owner": owner is not None and secrets.compare_digest(owner[0], token),
+                "claimed": owner is not None, "limits": limits}
+
+    def leave_member(self, topic: str, token: str) -> bool:
+        db = self._policy_db()
+        now = int(self.now())
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            self._expire_owners(db, now)
+            db.execute("DELETE FROM room_member WHERE topic=? AND member_token=?", (topic, token))
+            owner = db.execute("SELECT owner_token FROM room_owner WHERE topic=?", (topic,)).fetchone()
+            if owner is not None and secrets.compare_digest(owner[0], token):
+                active = db.execute("SELECT member_token FROM room_member WHERE topic=? AND last_seen>=?"
+                                    " ORDER BY joined_at, member_token LIMIT 1", (topic, now - 45)).fetchone()
+                if active:
+                    db.execute("UPDATE room_owner SET owner_token=?, claimed_at=?, last_seen=? WHERE topic=?",
+                               (active[0], now, now, topic))
+                else:
+                    db.execute("DELETE FROM room_policy WHERE topic=?", (topic,))
+                    db.execute("DELETE FROM room_owner WHERE topic=?", (topic,))
+        return True
 
     def read_policy(self, topic: str) -> dict[str, Any]:
         db = self._policy_db()
@@ -289,6 +372,7 @@ class Tracker:
             for topic in topics:
                 db.execute("DELETE FROM room_policy WHERE topic = ?", (topic,))
                 db.execute("DELETE FROM room_owner WHERE topic = ?", (topic,))
+                db.execute("DELETE FROM room_member WHERE topic = ?", (topic,))
         return {"ok": True, "cleared": len(topics)}
 
     def on_event_out(self, s: Session, room: str, nbytes: int) -> None:
@@ -497,7 +581,7 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             body = b""
 
     try:
-        public = path in ("/claim", "/policy") or path.startswith("/policy/")
+        public = path in ("/claim", "/policy", "/heartbeat", "/leave") or path.startswith("/policy/")
         if public:
             payload = None
             if method == "POST":
@@ -518,12 +602,19 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             if method == "GET" and path.startswith("/policy/"):
                 writer.write(_json(200, tracker.read_policy(topic)))
                 return
-            token = payload.get("token") if isinstance(payload, dict) else None
+            token_key = "member_token" if path in ("/heartbeat", "/leave") else "token"
+            if path == "/policy" and isinstance(payload, dict) and "member_token" in payload:
+                token_key = "member_token"
+            token = payload.get(token_key) if isinstance(payload, dict) else None
             if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
                 writer.write(_json(400, {"error": "invalid token"}))
                 return
             if method == "POST" and path == "/claim":
                 writer.write(_json(200, {"ok": True, "owner": tracker.claim(topic, token)}))
+            elif method == "POST" and path == "/heartbeat":
+                writer.write(_json(200, tracker.heartbeat(topic, token)))
+            elif method == "POST" and path == "/leave":
+                writer.write(_json(200, {"ok": tracker.leave_member(topic, token)}))
             elif method == "POST" and path == "/policy":
                 if not tracker.is_owner(topic, token):
                     writer.write(_json(403, {"error": "not owner"}))

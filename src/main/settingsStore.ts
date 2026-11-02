@@ -61,7 +61,7 @@ export class SettingsStore extends EventEmitter {
       this.current = normalizeSettings(raw, this.platform, this.identity);
       // A file from an older version lacks the newer keys: write the filled-in values once.
       const stored: Record<string, unknown> = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
-      if (Object.keys(this.current).some((k) => !(k in stored))) this.scheduleSave();
+      if (Object.keys(this.current).some((k) => !(k in stored)) || 'ownerTokens' in stored) this.scheduleSave();
       // A file with no emote key (an upgrade) isn't flagged: an old Ctrl user just gets the emote key off.
       this.emoteKeyClashed = 'emoteTrigger' in stored && stored.emoteTrigger !== 'off' && this.current.emoteTrigger === 'off';
     } catch (err) {

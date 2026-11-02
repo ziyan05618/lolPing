@@ -217,6 +217,7 @@ function start(): void {
   }
   const store = new SettingsStore(settingsDir(), undefined, PLATFORM, { name: osUserName(), color: randomInt(8) });
   let settings = store.load();
+  if (!settings.memberToken) settings = store.update({ memberToken: randomBytes(16).toString('hex') });
   // An imported emote whose still is gone is dropped; normalising the shorter list repairs the wheel slots that used it.
   const kept = library.present(settings.customEmotes);
   if (kept.length !== settings.customEmotes.length) settings = store.update({ customEmotes: kept });
@@ -299,23 +300,28 @@ function start(): void {
   const lan = new LanTransport();
   const relay = new RelayTransport({ urls: relayUrls() });
   const policyClient = new RoomPolicyClient();
+  const getMemberToken = (): string => {
+    const current = store.get();
+    if (current.memberToken) return current.memberToken;
+    const token = randomBytes(16).toString('hex');
+    store.update({ memberToken: token });
+    return token;
+  };
   const room = new RoomManager({
     transports: [lan, relay],
     now: Date.now,
     randomBytes: (n) => randomBytes(n),
     deriveKeys: deriveRoomKeys,
     appVersion: app.getVersion(),
+    memberToken: getMemberToken,
     policy: {
-      token: (topic) => store.get().ownerTokens[topic],
-      saveToken: (topic, token) => {
-        const ownerTokens = { ...store.get().ownerTokens };
-        if (token === null) delete ownerTokens[topic];
-        else ownerTokens[topic] = token;
-        store.update({ ownerTokens });
-      },
+      token: () => undefined,
+      saveToken: () => undefined,
       claim: (topic, token) => policyClient.claim(topic, token),
       read: (topic) => policyClient.read(topic),
       write: (topic, token, policy) => policyClient.write(topic, token, policy),
+      heartbeat: (topic, memberToken) => policyClient.heartbeat(topic, memberToken),
+      leave: (topic, memberToken) => policyClient.leave(topic, memberToken),
     },
     debug: (line) => console.debug('[rooms]', line),
     profile: () => ({

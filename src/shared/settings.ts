@@ -11,7 +11,7 @@ import { DEFAULT_CLICK_PING, DEFAULT_WHEEL, isPingId, type PingId } from './ping
 import type { Platform } from './platform';
 import { isTagColor, isTagRgb, readableTagRgb, type TagRgb } from './roomColors';
 import { parseRoomCode } from './roomCode';
-import { OWNER_TOKEN_RE, ROOM_TOPIC_RE } from './roomPolicy';
+import { OWNER_TOKEN_RE } from './roomPolicy';
 import { sanitizeName } from './roomProtocol';
 import { isVersion } from './update';
 import type { PingTag } from './ipc';
@@ -73,7 +73,9 @@ export interface Settings {
   rejoinRoom: boolean;
   /** Canonical code of the room to rejoin on launch. */
   lastRoomCode: string | null;
-  /** Tokens for rooms created here, kept across leaves and restarts. */
+  /** Stable per-installation token used to register presence with the policy service. */
+  memberToken: string;
+  /** Deprecated per-room owner tokens retained for settings compatibility. */
   ownerTokens: Record<string, string>;
   roomMuted: boolean;
   /** Held with a click-drag to open the emote wheel; 'off' turns the emote wheel off. Never the same key as `trigger`, and a custom key or Caps Lock is never the pause shortcut's key either. */
@@ -136,6 +138,7 @@ export const DEFAULT_SETTINGS: Settings = {
   allowInternet: true,
   rejoinRoom: true,
   lastRoomCode: null,
+  memberToken: '',
   ownerTokens: {},
   roomMuted: false,
   emoteTrigger: 'mouse5',
@@ -306,13 +309,14 @@ function roomCode(raw: unknown): string | null {
   return parsed.ok ? parsed.code : null;
 }
 
-function ownerTokens(raw: unknown): Record<string, string> {
-  if (!isObj(raw)) return {};
-  const entries: [string, string][] = [];
-  for (const [topic, token] of Object.entries(raw)) {
-    if (ROOM_TOPIC_RE.test(topic) && typeof token === 'string' && OWNER_TOKEN_RE.test(token)) entries.push([topic, token]);
-  }
-  return Object.fromEntries(entries);
+function memberToken(raw: unknown): string {
+  return typeof raw === 'string' && OWNER_TOKEN_RE.test(raw) ? raw.toLowerCase() : '';
+}
+
+function ownerTokens(_raw: unknown): Record<string, string> {
+  // Per-room tokens belonged to the previous ownership model. Keep the field for renderer/settings compatibility,
+  // but never carry them forward after migrating to one stable member token.
+  return {};
 }
 
 /** Valid entries only, rebuilt field by field: well-formed unique ids, boolean flags, a safe name; the first MAX_CUSTOM_EMOTES. */
@@ -379,6 +383,7 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     allowInternet: bool(r.allowInternet, 'allowInternet'),
     rejoinRoom: bool(r.rejoinRoom, 'rejoinRoom'),
     lastRoomCode: roomCode(r.lastRoomCode),
+    memberToken: memberToken(r.memberToken),
     ownerTokens: ownerTokens(r.ownerTokens),
     roomMuted: bool(r.roomMuted, 'roomMuted'),
     emoteTrigger: triggersClash(pingTrigger, emote, toggleHotkey) ? 'off' : emote,
@@ -409,7 +414,7 @@ export function mergeSettings(current: Settings, patch: Partial<Settings>, platf
  */
 export function rendererPatch(raw: unknown): Partial<Settings> {
   if (!isObj(raw)) return {};
-  const { customEmotes: _emotes, updateNotifiedVersion: _notified, ownerTokens: _tokens, ...patch } = raw;
+  const { customEmotes: _emotes, updateNotifiedVersion: _notified, ownerTokens: _tokens, memberToken: _member, ...patch } = raw;
   return patch as Partial<Settings>;
 }
 

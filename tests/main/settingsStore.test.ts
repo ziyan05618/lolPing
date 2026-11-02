@@ -12,16 +12,19 @@ const savedTagColor = (dir: string, color: number) =>
   vi.waitFor(() => expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).tagColor).toBe(color), { timeout: 3000 });
 
 describe('SettingsStore', () => {
-  it('persists room owner tokens through a save and restart', async () => {
+  it('migrates deprecated room owner tokens to the stable member token model', async () => {
     const dir = tempDir();
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ ownerTokens: { ['ab'.repeat(32)]: 'cd'.repeat(16) } }));
     const store = new SettingsStore(dir);
-    store.load();
-    const ownerTokens = { ['ab'.repeat(32)]: 'cd'.repeat(16) };
-    store.update({ ownerTokens });
+    expect(store.load().ownerTokens).toEqual({});
+    expect(store.get().memberToken).toBe('');
+    store.update({ memberToken: 'ef'.repeat(16) });
     await store.flush();
-    expect(JSON.parse(readFileSync(store.file, 'utf8')).ownerTokens).toEqual(ownerTokens);
+    const saved = JSON.parse(readFileSync(store.file, 'utf8'));
+    expect(saved.ownerTokens).toEqual({});
+    expect(saved.memberToken).toBe('ef'.repeat(16));
     const restarted = new SettingsStore(dir);
-    expect(restarted.load().ownerTokens).toEqual(ownerTokens);
+    expect(restarted.load().memberToken).toBe('ef'.repeat(16));
     await restarted.flush();
   });
   it('uses defaults when there is no file', () => {
