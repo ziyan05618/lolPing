@@ -1,14 +1,17 @@
 {
   "name": "lolping",
   "productName": "lolPing",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "League of Legends style ping wheel for your Windows, macOS and Linux desktop",
   "author": "Danrui Meng (https://github.com/darrenprx)",
   "license": "MIT",
-  "homepage": "https://github.com/darrenprx/lolPing#readme",
-  "repository": { "type": "git", "url": "https://github.com/darrenprx/lolPing.git" },
-  "bugs": "https://github.com/darrenprx/lolPing/issues",
+  "homepage": "https://github.com/ziyan05618/lolPing#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ziyan05618/lolPing.git"
+  },
+  "bugs": "https://github.com/ziyan05618/lolPing/issues",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -57,18 +60,43 @@
   "build": {
     "appId": "com.lolping.app",
     "productName": "lolPing",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["out/**/*", "package.json"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
     "extraResources": [
-      { "from": "node_modules/pdfjs-dist/cmaps", "to": "pdfjs/cmaps" },
-      { "from": "node_modules/pdfjs-dist/standard_fonts", "to": "pdfjs/standard_fonts" }
+      {
+        "from": "node_modules/pdfjs-dist/cmaps",
+        "to": "pdfjs/cmaps"
+      },
+      {
+        "from": "node_modules/pdfjs-dist/standard_fonts",
+        "to": "pdfjs/standard_fonts"
+      }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico",
       "extraResources": [
-        { "from": "native/hook-helper/build/hook-helper.exe", "to": "hook-helper.exe" },
-        { "from": "native/hook-helper/build/context-helper.exe", "to": "context-helper.exe" }
+        {
+          "from": "native/hook-helper/build/hook-helper.exe",
+          "to": "hook-helper.exe"
+        },
+        {
+          "from": "native/hook-helper/build/context-helper.exe",
+          "to": "context-helper.exe"
+        }
       ]
     },
     "nsis": {
@@ -80,15 +108,34 @@
     },
     "mac": {
       "minimumSystemVersion": "13.0",
-      "target": [{ "target": "dmg", "arch": ["arm64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
       "icon": "build/icon.png",
       "category": "public.app-category.utilities",
       "identity": "-",
       "hardenedRuntime": false,
       "extraResources": [
-        { "from": "native/hook-helper/build/hook-helper", "to": "hook-helper" },
-        { "from": "native/hook-helper/build/context-helper", "to": "context-helper" },
-        { "from": "build", "to": ".", "filter": ["tray*Template*.png"] }
+        {
+          "from": "native/hook-helper/build/hook-helper",
+          "to": "hook-helper"
+        },
+        {
+          "from": "native/hook-helper/build/context-helper",
+          "to": "context-helper"
+        },
+        {
+          "from": "build",
+          "to": ".",
+          "filter": [
+            "tray*Template*.png"
+          ]
+        }
       ],
       "extendInfo": {
         "NSAccessibilityUsageDescription": "lolPing reads the mouse and keyboard to open the ping wheel or the emote wheel when you hold its key and drag.",
@@ -98,15 +145,45 @@
         "NSLocalNetworkUsageDescription": "lolPing finds the other people in your room on the local network and sends them your pings."
       }
     },
-    "dmg": { "artifactName": "lolPing-${version}-arm64.dmg" },
-    "publish": [{ "provider": "github", "owner": "darrenprx", "repo": "lolPing" }],
+    "dmg": {
+      "artifactName": "lolPing-${version}-arm64.dmg"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ziyan05618",
+        "repo": "lolPing"
+      }
+    ],
     "linux": {
-      "target": [{ "target": "AppImage", "arch": ["x64"] }, { "target": "deb", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.png",
       "category": "Utility",
       "artifactName": "lolPing-${version}-${arch}.${ext}",
-      "extraResources": [{ "from": "native/hook-helper/build/hook-helper", "to": "hook-helper" }],
-      "desktop": { "entry": { "StartupWMClass": "lolping" } },
+      "extraResources": [
+        {
+          "from": "native/hook-helper/build/hook-helper",
+          "to": "hook-helper"
+        }
+      ],
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "lolping"
+        }
+      },
       "maintainer": "lolPing contributors",
       "syncDesktopName": true
     },
@@ -126,6 +203,8 @@
       ]
     }
   },
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "desktopName": "lolping.desktop"
 }

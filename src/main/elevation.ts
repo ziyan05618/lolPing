@@ -26,15 +26,22 @@ const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`;
  */
 export function relaunchElevated(): boolean {
   const args = process.argv.slice(1);
-  const list = args.length > 0 ? `@(${args.map(psQuote).join(',')})` : '@()';
-  const command = `try { Start-Process -FilePath ${psQuote(process.execPath)} -ArgumentList ${list} -Verb RunAs -ErrorAction Stop; exit 0 } catch { exit 1 }`;
+  // Start-Process rejects an empty -ArgumentList outright ("该参数为 Null、为空"), and a packaged app passes no
+  // arguments, so the switch is left out entirely rather than handed an empty array.
+  const list = args.length > 0 ? ` -ArgumentList @(${args.map(psQuote).join(',')})` : '';
+  const command = `try { Start-Process -FilePath ${psQuote(process.execPath)}${list} -Verb RunAs -ErrorAction Stop; exit 0 } catch { exit 1 }`;
   try {
     const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', command], {
-      stdio: 'ignore',
+      encoding: 'utf8',
       windowsHide: true,
     });
-    return r.status === 0;
-  } catch {
+    if (r.status !== 0) {
+      console.error('[elevation] runas failed:', (r.stderr || '').trim().slice(0, 300) || `exit ${r.status}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[elevation] runas threw:', err);
     return false;
   }
 }
