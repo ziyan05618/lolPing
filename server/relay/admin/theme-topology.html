@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lolPing 中继 · 拓扑</title>
+<style>
+  :root {
+    --void: #06080a; --ink: #dfe8ee; --dim: #5a6b78; --edge: #16202a;
+    --link: #1d3b46; --accent: #2ee6c5; --danger: #ff4d6a;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--void); color: var(--ink); overflow: hidden;
+    font: 12px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+
+  .topbar { position: fixed; inset: 0 0 auto 0; height: 52px; display: flex; align-items: center;
+    gap: 26px; padding: 0 22px; border-bottom: 1px solid var(--edge); background: rgba(6,8,10,.82);
+    backdrop-filter: blur(8px); z-index: 3; }
+  .topbar b { font-weight: 600; letter-spacing: .04em; }
+  .stat { font: 11px var(--mono); color: var(--dim); }
+  .stat i { font-style: normal; color: var(--accent); }
+  .spacer { margin-left: auto; }
+  .pill { font: 10.5px var(--mono); color: var(--dim); border: 1px solid var(--edge); border-radius: 99px; padding: 3px 9px; }
+
+  #stage { position: fixed; inset: 52px 0 0 0; }
+  svg { width: 100%; height: 100%; display: block; }
+  .ring { fill: none; stroke: var(--edge); stroke-width: 1; }
+  .roomCore { fill: #0d1a20; stroke: var(--accent); stroke-width: 1.4; }
+  .roomLabel { fill: var(--ink); font: 11px var(--mono); text-anchor: middle; }
+  .roomSub { fill: var(--dim); font: 9.5px var(--mono); text-anchor: middle; letter-spacing: .08em; }
+  .link { stroke: var(--link); stroke-width: 1; }
+  .link.hot { stroke: var(--accent); stroke-opacity: .55; }
+  .peer { fill: #1b2b36; stroke: #2c4652; stroke-width: 1; cursor: pointer; transition: fill .15s, stroke .15s; }
+  .peer:hover, .peer.sel { fill: var(--accent); stroke: var(--accent); }
+  .peer.dup { stroke: var(--danger); stroke-width: 1.6; }
+  .peerLabel { fill: var(--dim); font: 9px var(--mono); text-anchor: middle; pointer-events: none; }
+
+  aside { position: fixed; top: 52px; right: 0; bottom: 0; width: 300px; border-left: 1px solid var(--edge);
+    background: rgba(9,13,16,.94); padding: 18px 18px 24px; overflow-y: auto; z-index: 2; }
+  aside h3 { margin: 0 0 3px; font: 12px var(--mono); letter-spacing: .06em; }
+  aside .sub { color: var(--dim); font: 10.5px var(--mono); margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 74px 1fr; gap: 7px 10px; font-size: 12px; margin-bottom: 18px; }
+  .kv dt { color: var(--dim); font-size: 11px; }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+  .hint { color: #3f4f5b; font-size: 11.5px; line-height: 1.7; }
+  button { width: 100%; margin-top: 8px; padding: 8px; border-radius: 5px; cursor: pointer;
+    background: none; border: 1px solid var(--edge); color: var(--dim); font: 11.5px inherit; }
+  button:hover { color: var(--danger); border-color: var(--danger); }
+  .legend { position: fixed; left: 22px; bottom: 18px; font: 10.5px var(--mono); color: #3f4f5b; line-height: 1.9; }
+  .legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>lolPing 中继</b>
+  <span class="stat">在线 <i id="t-online">0</i></span>
+  <span class="stat">房间 <i id="t-rooms">0</i></span>
+  <span class="stat">事件/分 <i id="t-events">0</i></span>
+  <span class="spacer"></span>
+  <span class="pill" id="t-src">演示数据</span>
+</div>
+
+<div id="stage"><svg id="map"></svg></div>
+
+<aside>
+  <h3 id="p-title">未选中</h3>
+  <div class="sub" id="p-sub">点一个节点看详情</div>
+  <dl class="kv" id="p-kv"></dl>
+  <button id="p-ban" hidden>封禁这个地址 24 小时</button>
+  <p class="hint" id="p-hint">房间码的哈希决定节点的位置。连线越亮，事件越多。红圈的地址开了不止一条连接。</p>
+</aside>
+
+<div class="legend">
+  <div><i style="background:#2ee6c5"></i>房间</div>
+  <div><i style="background:#1b2b36;border:1px solid #2c4652"></i>客户端</div>
+  <div><i style="background:#ff4d6a"></i>同 IP 多连接</div>
+</div>
+
+<script>
+const DEMO = {
+  overview: { online: 3, unique_ips_online: 3, rooms_online: 1, uptime_s: 1077, events_this_minute: 42, peak_online: 5 },
+  sessions: [
+    { ip: '113.87.42.19', online_s: 934, events_in: 512, events_out: 1024, bytes_in: 391168, bytes_out: 782336, rooms: ['7f3c9d2a10'], agent: 'lolPing/0.6.0' },
+    { ip: '113.87.42.19', online_s: 612, events_in: 301, events_out: 602, bytes_in: 229912, bytes_out: 459824, rooms: ['7f3c9d2a10'], agent: 'lolPing/0.6.0' },
+    { ip: '183.14.132.7', online_s: 88, events_in: 44, events_out: 88, bytes_in: 33616, bytes_out: 67232, rooms: ['7f3c9d2a10'], agent: 'lolPing/0.6.0' },
+  ],
+  rooms: [{ room: '7f3c9d2a10', online: 3, events: 1842, last_seen: Date.now() / 1000 }],
+};
+
+const fmtDur = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h';
+const fmtBytes = (b) => b < 1048576 ? (b / 1024).toFixed(0) + 'K' : (b / 1048576).toFixed(1) + 'M';
+
+const warnOffline = () => {
+  if (window.__offlineWarned) return;
+  window.__offlineWarned = true;
+  const bar = document.createElement('div');
+  bar.textContent = '未取到实时数据（认证未通过或网络异常）——下面显示的是示例值，不是真实流量';
+  bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#b3261e;color:#fff;'
+    + 'font:13px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:9px 16px;text-align:center;'
+    + 'box-shadow:0 2px 12px rgba(0,0,0,.35)';
+  document.body.prepend(bar);
+};
+
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const withToken = (p) => (TOKEN ? p + (p.includes('?') ? '&' : '?') + 'token=' + TOKEN : p);
+
+async function get(path, fallback) {
+  try {
+    const r = await fetch('api' + withToken(path), { cache: 'no-store' });
+    if (!r.ok) throw 0;
+    return await r.json();
+  } catch { warnOffline(); return fallback; }
+}
+
+let selected = null;
+
+function draw(rooms, sessions, ov) {
+  const svg = document.getElementById('map');
+  const w = svg.clientWidth, h = svg.clientHeight;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+  const byRoom = {};
+  sessions.forEach((s) => {
+    const key = s.rooms[0] || '∅';
+    (byRoom[key] = byRoom[key] || []).push(s);
+  });
+  const keys = Object.keys(byRoom);
+  // The aside is fixed on the right; lay the graph out in the space that is actually visible.
+  const usable = Math.max(320, w - 300);
+  const cols = Math.max(1, Math.ceil(Math.sqrt(keys.length)));
+  const cellW = usable / cols;
+  const rows = Math.max(1, Math.ceil(keys.length / cols));
+  const cellH = (h - 40) / rows;
+
+  let out = '';
+  keys.forEach((room, i) => {
+    const cx = cellW * (i % cols) + cellW / 2;
+    const cy = cellH * Math.floor(i / cols) + cellH / 2 + 10;
+    const peers = byRoom[room];
+    const radius = Math.min(cellW * 0.3, cellH * 0.3, 132);
+    const roomEvents = rooms.find((r) => r.room === room)?.events || 0;
+
+    out += `<circle class="ring" cx="${cx}" cy="${cy}" r="${radius + 18}" />`;
+    out += `<circle class="ring" cx="${cx}" cy="${cy}" r="${radius + 42}" stroke-dasharray="2 6" opacity=".5" />`;
+
+    const perIp = {};
+    peers.forEach((p) => { perIp[p.ip] = (perIp[p.ip] || 0) + 1; });
+
+    peers.forEach((p, j) => {
+      const a = (j / peers.length) * Math.PI * 2 - Math.PI / 2;
+      const px = cx + Math.cos(a) * radius;
+      const py = cy + Math.sin(a) * radius;
+      const hot = p.events_in + p.events_out > 300 ? ' hot' : '';
+      out += `<line class="link${hot}" x1="${cx}" y1="${cy}" x2="${px}" y2="${py}" />`;
+      const dup = perIp[p.ip] > 1 ? ' dup' : '';
+      const sel = selected && selected.id === (p.id || p.ip + p.online_s) ? ' sel' : '';
+      out += `<circle class="peer${dup}${sel}" cx="${px}" cy="${py}" r="6.5" data-ip="${p.ip}"
+        data-i="${i}-${j}" />`;
+      out += `<text class="peerLabel" x="${px}" y="${py - 12}">${p.ip.split('.').slice(-2).join('.')}</text>`;
+    });
+
+    out += `<circle class="roomCore" cx="${cx}" cy="${cy}" r="21" />`;
+    out += `<text class="roomLabel" x="${cx}" y="${cy + 3.5}">${room.slice(0, 6)}</text>`;
+    out += `<text class="roomSub" x="${cx}" y="${cy + 40}">${peers.length} 在线 · ${roomEvents} 事件</text>`;
+  });
+
+  svg.innerHTML = out || `<text x="${w / 2}" y="${h / 2}" fill="#3f4f5b" text-anchor="middle"
+    font-family="ui-monospace" font-size="12">此刻没有连接</text>`;
+
+  svg.querySelectorAll('.peer').forEach((el) => {
+    el.onclick = () => {
+      const [i, j] = el.dataset.i.split('-').map(Number);
+      selected = { ...byRoom[keys[i]][j], id: keys[i] + j };
+      show(selected);
+      draw(rooms, sessions, ov);
+    };
+  });
+}
+
+function show(s) {
+  document.getElementById('p-title').textContent = s.ip;
+  document.getElementById('p-sub').textContent = s.agent || 'lolPing';
+  document.getElementById('p-kv').innerHTML = `
+    <dt>房间</dt><dd>${s.rooms[0] || '—'}</dd>
+    <dt>在线</dt><dd>${fmtDur(s.online_s)}</dd>
+    <dt>事件</dt><dd>${s.events_in} 收 / ${s.events_out} 发</dd>
+    <dt>流量</dt><dd>${fmtBytes(s.bytes_in + s.bytes_out)}</dd>`;
+  const ban = document.getElementById('p-ban');
+  ban.hidden = false;
+  ban.onclick = async () => {
+    if (!confirm('封禁 ' + s.ip + ' 24 小时？')) return;
+    await fetch('api' + withToken('/ban'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: s.ip, minutes: 1440, reason: 'admin' }) }).catch(() => {});
+    render();
+  };
+}
+
+async function render() {
+  const [ov, sessions, rooms] = await Promise.all([
+    get('/overview', DEMO.overview), get('/sessions', DEMO.sessions), get('/rooms', DEMO.rooms),
+  ]);
+  document.getElementById('t-src').textContent = ov === DEMO.overview ? '演示数据' : '实时';
+  document.getElementById('t-online').textContent = ov.online;
+  document.getElementById('t-rooms').textContent = ov.rooms_online;
+  document.getElementById('t-events').textContent = ov.events_this_minute;
+  draw(rooms, sessions, ov);
+}
+
+addEventListener('resize', render);
+render();
+setInterval(render, 5000);
+</script>
+</body>
+</html>

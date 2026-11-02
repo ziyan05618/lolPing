@@ -1,0 +1,43 @@
+[Unit]
+Description=lolPing room relay (ephemeral Nostr, kind 24747)
+Documentation=https://github.com/darrenprx/lolPing
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lolping
+Group=lolping
+WorkingDirectory=/opt/lolping-relay
+Environment=RELAY_HOST=127.0.0.1
+Environment=RELAY_PORT=8787
+Environment=ADMIN_PORT=8788
+Environment=RELAY_DB=/var/lib/lolping-relay/relay.db
+# RELAY_PATH (the capability path) and ADMIN_TOKEN live here so a redeploy never rotates them.
+EnvironmentFile=-/etc/lolping-relay.env
+ExecStart=/usr/bin/python3 /opt/lolping-relay/lolping-relay.py
+Restart=always
+RestartSec=3
+
+# The relay reads nothing but its own script and writes nothing at all; the admin database is the one exception.
+StateDirectory=lolping-relay
+StateDirectoryMode=0750
+
+# The relay reads nothing but its own script and writes nothing at all.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=256M
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

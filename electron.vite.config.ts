@@ -6,6 +6,11 @@ import { teammateCsp } from './tools/teammateCsp';
 
 export default defineConfig({
   main: {
+    define: {
+      // The owner's self-hosted relay carries a capability path, so it is injected here rather than committed.
+      // `LOLPING_PRIVATE_RELAY=wss://host/<path> npm run dist` produces a build that prefers it.
+      __PRIVATE_RELAY__: JSON.stringify(process.env.LOLPING_PRIVATE_RELAY ?? ''),
+    },
     build: {
       rollupOptions: {
         input: { index: resolve('src/main/index.ts'), bridge: resolve('src/main/mcp/bridge.ts') },

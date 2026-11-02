@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lolPing 中继 · 账本</title>
+<style>
+  :root {
+    --paper: #faf8f3; --ink: #17150f; --muted: #6b6459; --rule: #d8d1c2; --accent: #9c2b1e;
+    --serif: "Songti SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+    --sans: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased; }
+  .sheet { max-width: 1080px; margin: 0 auto; padding: 46px 32px 90px; }
+
+  header { border-bottom: 3px double var(--ink); padding-bottom: 12px; display: flex;
+    align-items: baseline; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  h1 { font: 400 40px/1.05 var(--serif); margin: 0; letter-spacing: -.015em; }
+  .dateline { font: 12px/1.5 var(--sans); letter-spacing: .13em; text-transform: uppercase; color: var(--muted); }
+
+  .lede { font: 400 22px/1.55 var(--serif); margin: 30px 0 6px; max-width: 36em; }
+  .lede em { font-style: normal; border-bottom: 2px solid var(--ink); padding-bottom: 1px; }
+  .byline { font-size: 12.5px; color: var(--muted); letter-spacing: .02em; margin-bottom: 34px; }
+
+  .figures { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--rule); }
+  .fig { padding: 16px 18px 18px 0; border-right: 1px solid var(--rule); }
+  .fig:last-child { border-right: 0; }
+  .fig b { display: block; font: 400 46px/1 var(--serif); font-variant-numeric: oldstyle-nums; letter-spacing: -.02em; }
+  .fig span { display: block; font-size: 11px; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--muted); margin-top: 9px; }
+  .fig.hot b { color: var(--accent); }
+
+  .body { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; margin-top: 40px; }
+  .body > section { min-width: 0; }
+  h2 { font: 400 13px/1.4 var(--sans); letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+    margin: 0 0 14px; padding-bottom: 7px; border-bottom: 1px solid var(--ink); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-weight: 400; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); padding: 0 0 7px; border-bottom: 1px solid var(--rule); }
+  td { padding: 9px 0; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; vertical-align: baseline; }
+  .r { text-align: right; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  .dup { color: var(--accent); }
+  .muted { color: var(--muted); }
+  .none { padding: 22px 0; color: var(--muted); font-style: italic; }
+
+  a.act { color: var(--accent); text-decoration: none; border-bottom: 1px solid currentColor; font-size: 12.5px; cursor: pointer; }
+  a.act:hover { opacity: .65; }
+
+  .note { margin-top: 46px; padding-top: 14px; border-top: 1px solid var(--rule); font-size: 12.5px;
+    color: var(--muted); line-height: 1.8; }
+  .note b { color: var(--ink); font-weight: 600; }
+
+  .chart { margin-top: 46px; }
+  .chart svg { width: 100%; height: 130px; display: block; }
+  .axis { font: 10px var(--sans); fill: var(--muted); letter-spacing: .06em; }
+
+  @media (max-width: 860px) {
+    .sheet { padding: 30px 20px 60px; }
+    h1 { font-size: 30px; }
+    .lede { font-size: 18px; }
+    .figures { grid-template-columns: repeat(2, 1fr); }
+    .fig { border-bottom: 1px solid var(--rule); }
+    .body { grid-template-columns: 1fr; gap: 38px; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <h1>lolPing 中继 · 运行账本</h1>
+    <div class="dateline">pet-api.zyyun618.com · <span id="today"></span></div>
+  </header>
+
+  <p class="lede">过去 24 小时，有 <em id="lede-ips">6</em> 个地址连过这台中继，
+    其中 <em id="lede-online">3</em> 个此刻还在线上。</p>
+  <div class="byline">数据每 5 秒刷新 · <span id="src">演示数据</span> · 时区 Asia/Shanghai</div>
+
+  <div class="figures">
+    <div class="fig"><b id="f-online">3</b><span>在线连接</span></div>
+    <div class="fig"><b id="f-rooms">1</b><span>活跃房间</span></div>
+    <div class="fig" id="f-events-card"><b id="f-events">42</b><span>本分钟事件</span></div>
+    <div class="fig"><b id="f-peak">5</b><span>峰值在线</span></div>
+  </div>
+
+  <div class="chart">
+    <h2>近 60 分钟事件量</h2>
+    <svg id="chart" viewBox="0 0 1000 130" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="body">
+    <section>
+      <h2>此刻在线</h2>
+      <table>
+        <thead><tr><th>地址</th><th class="r">时长</th><th class="r">事件</th><th class="r">流量</th><th></th></tr></thead>
+        <tbody id="live"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>房间</h2>
+      <table>
+        <thead><tr><th>房间</th><th class="r">在线</th><th class="r">累计事件</th><th class="r">最近</th></tr></thead>
+        <tbody id="rooms"></tbody>
+      </table>
+
+      <h2 style="margin-top:34px">已封禁</h2>
+      <table>
+        <thead><tr><th>地址</th><th>原因</th><th class="r">到期</th><th></th></tr></thead>
+        <tbody id="bans"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <div class="note">
+    <b>关于这张表。</b> 中继只转发密文，看不到房间里说了什么，也不知道房间码；
+    「房间」一列是房间码的哈希前 10 位，只用来区分不同的房间。
+    同一地址出现两条以上连接时标红——那是重连风暴或刷子的第一个信号。
+  </div>
+</div>
+
+<script>
+const DEMO = {
+  overview: { online: 3, unique_ips_online: 3, rooms_online: 1, uptime_s: 1077, events_this_minute: 42,
+    peak_online: 5, sessions_24h: 18, unique_ips_24h: 6, events_24h: 942, rooms_24h: 3 },
+  sessions: [
+    { ip: '113.87.42.19', online_s: 934, events_in: 512, events_out: 1024, bytes_in: 391168, bytes_out: 782336, rooms: ['7f3c9d2a10'] },
+    { ip: '113.87.42.19', online_s: 612, events_in: 301, events_out: 602, bytes_in: 229912, bytes_out: 459824, rooms: ['7f3c9d2a10'] },
+    { ip: '183.14.132.7', online_s: 88, events_in: 44, events_out: 88, bytes_in: 33616, bytes_out: 67232, rooms: ['7f3c9d2a10'] },
+  ],
+  rooms: [{ room: '7f3c9d2a10', online: 3, events: 1842, last_seen: Date.now() / 1000 }],
+  bans: [],
+  timeseries: Array.from({ length: 60 }, (_, i) => ({ events_in: 0, events_out: 0,
+    v: Math.round(20 + 18 * Math.sin(i / 5) + Math.random() * 12) })),
+};
+
+const d = new Date();
+document.getElementById('today').textContent =
+  `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+
+const fmtDur = (s) => { s = Math.max(0, Math.round(s));
+  return s < 60 ? s + ' 秒' : s < 3600 ? Math.floor(s / 60) + ' 分' : (s / 3600).toFixed(1) + ' 小时'; };
+const fmtBytes = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(0) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+
+const warnOffline = () => {
+  if (window.__offlineWarned) return;
+  window.__offlineWarned = true;
+  const bar = document.createElement('div');
+  bar.textContent = '未取到实时数据（认证未通过或网络异常）——下面显示的是示例值，不是真实流量';
+  bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#b3261e;color:#fff;'
+    + 'font:13px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:9px 16px;text-align:center;'
+    + 'box-shadow:0 2px 12px rgba(0,0,0,.35)';
+  document.body.prepend(bar);
+};
+
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const withToken = (p) => (TOKEN ? p + (p.includes('?') ? '&' : '?') + 'token=' + TOKEN : p);
+
+async function get(path, fallback) {
+  try {
+    const r = await fetch('api' + withToken(path), { cache: 'no-store' });
+    if (!r.ok) throw 0;
+    return await r.json();
+  } catch { warnOffline(); return fallback; }
+}
+
+async function render() {
+  const [ov, sessions, rooms, bans, ts] = await Promise.all([
+    get('/overview', DEMO.overview), get('/sessions', DEMO.sessions), get('/rooms', DEMO.rooms),
+    get('/bans', DEMO.bans), get('/timeseries?minutes=60', DEMO.timeseries),
+  ]);
+  const live = ov !== DEMO.overview;
+  document.getElementById('src').textContent = live ? '实时' : '演示数据';
+
+  document.getElementById('lede-ips').textContent = ov.unique_ips_24h;
+  document.getElementById('lede-online').textContent = ov.online;
+  document.getElementById('f-online').textContent = ov.online;
+  document.getElementById('f-rooms').textContent = ov.rooms_online;
+  document.getElementById('f-events').textContent = ov.events_this_minute;
+  document.getElementById('f-peak').textContent = ov.peak_online;
+  document.getElementById('f-events-card').classList.toggle('hot', ov.events_this_minute > 300);
+
+  const perIp = {};
+  sessions.forEach((s) => { perIp[s.ip] = (perIp[s.ip] || 0) + 1; });
+  document.getElementById('live').innerHTML = sessions.length === 0
+    ? '<tr><td colspan="5" class="none">此刻没有连接。</td></tr>'
+    : sessions.map((s) => `<tr>
+        <td class="mono ${perIp[s.ip] > 1 ? 'dup' : ''}">${s.ip}${perIp[s.ip] > 1 ? ' ×' + perIp[s.ip] : ''}</td>
+        <td class="r">${fmtDur(s.online_s)}</td>
+        <td class="r">${s.events_in + s.events_out}</td>
+        <td class="r">${fmtBytes(s.bytes_in + s.bytes_out)}</td>
+        <td class="r"><a class="act" data-ip="${s.ip}">封禁</a></td>
+      </tr>`).join('');
+
+  document.querySelectorAll('#live a.act').forEach((a) => {
+    a.onclick = async () => {
+      if (!confirm('封禁 ' + a.dataset.ip + ' 24 小时？')) return;
+      await fetch('api' + withToken('/ban'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: a.dataset.ip, minutes: 1440, reason: 'admin' }) }).catch(() => {});
+      render();
+    };
+  });
+
+  document.getElementById('rooms').innerHTML = rooms.length === 0
+    ? '<tr><td colspan="4" class="none">暂无房间。</td></tr>'
+    : rooms.slice(0, 8).map((r) => `<tr>
+        <td class="mono">${r.room}</td><td class="r">${r.online}</td>
+        <td class="r">${r.events}</td><td class="r muted">${fmtDur(Date.now() / 1000 - r.last_seen)}前</td>
+      </tr>`).join('');
+
+  document.getElementById('bans').innerHTML = bans.length === 0
+    ? '<tr><td colspan="4" class="none">没有封禁记录。</td></tr>'
+    : bans.map((b) => `<tr>
+        <td class="mono">${b.ip}</td><td class="muted">${b.reason || '—'}</td>
+        <td class="r muted">${b.expires_at ? new Date(b.expires_at * 1000).toLocaleDateString('zh-CN') : '永久'}</td>
+        <td class="r"><a class="act" data-unban="${b.ip}">解除</a></td>
+      </tr>`).join('');
+
+  document.querySelectorAll('#bans a[data-unban]').forEach((a) => {
+    a.onclick = async () => {
+      await fetch('api' + withToken('/unban'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: a.dataset.unban }) }).catch(() => {});
+      render();
+    };
+  });
+
+  const max = Math.max(1, ...ts.map((p) => p.events_in + p.events_out || p.v || 0));
+  const pts = ts.map((p, i) => {
+    const v = p.events_in + p.events_out || p.v || 0;
+    return [ts.length < 2 ? 0 : (i / (ts.length - 1)) * 1000, 120 - (v / max) * 110];
+  });
+  const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  document.getElementById('chart').innerHTML = `
+    <path d="${path} L1000,130 L0,130 Z" fill="rgba(156,43,30,.07)" />
+    <path d="${path}" fill="none" stroke="#9c2b1e" stroke-width="1.6" />
+    <line x1="0" y1="130" x2="1000" y2="130" stroke="#d8d1c2" stroke-width="1" />
+    <text class="axis" x="0" y="127">60 分钟前</text>
+    <text class="axis" x="940" y="127">现在</text>
+    <text class="axis" x="0" y="12">峰值 ${max} 事件/分</text>`;
+}
+
+render();
+setInterval(render, 5000);
+</script>
+</body>
+</html>

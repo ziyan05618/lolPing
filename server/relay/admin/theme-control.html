@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lolPing 中继 · 控制室</title>
+<style>
+  :root {
+    --bg: #0b0e11; --panel: #11161b; --line: #1d252d; --ink: #e6edf3; --dim: #7d8b99;
+    --signal: #35d27a; --warn: #f2b320; --danger: #ff3b55;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .wrap { display: grid; grid-template-columns: 210px 1fr; min-height: 100vh; }
+
+  aside { border-right: 1px solid var(--line); padding: 20px 16px; display: flex; flex-direction: column; gap: 22px; }
+  .brand { font-weight: 650; letter-spacing: .02em; }
+  .brand small { display: block; color: var(--dim); font-weight: 400; font-size: 11px; margin-top: 2px; }
+  .state { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--signal);
+    box-shadow: 0 0 0 0 rgba(53,210,122,.5); animation: pulse 2s infinite; }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(53,210,122,0); } 100% { box-shadow: 0 0 0 0 rgba(53,210,122,0); } }
+  nav { display: flex; flex-direction: column; gap: 2px; }
+  nav a { color: var(--dim); text-decoration: none; padding: 7px 9px; border-radius: 5px; font-size: 12.5px; }
+  nav a.on { background: var(--panel); color: var(--ink); }
+  nav a:hover { color: var(--ink); }
+  .meta { margin-top: auto; font: 11px/1.7 var(--mono); color: #55616e; }
+
+  main { padding: 22px 26px 40px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .kpi { background: var(--panel); padding: 14px 16px 16px; }
+  .kpi b { display: block; font: 500 34px/1 var(--mono); letter-spacing: -.02em; margin-bottom: 8px; }
+  .kpi span { font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); }
+  .kpi.warn b { color: var(--warn); }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); }
+  .panel.flash { outline: 1px solid var(--signal); outline-offset: -1px; }
+  section[id] { scroll-margin-top: 16px; }
+  .head { display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .head h2 { margin: 0; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  .head .n { font: 11px var(--mono); color: #55616e; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-weight: 500; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+    color: #55616e; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 14px; border-bottom: 1px solid #151c22; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  tr.flag td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
+  .ip { font-family: var(--mono); }
+  .num { font-family: var(--mono); text-align: right; }
+  .tag { font: 10px var(--mono); color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+  .empty { padding: 26px 14px; color: #55616e; font-size: 12.5px; }
+
+  button { font: 11.5px inherit; color: var(--dim); background: none; border: 1px solid var(--line);
+    border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  button:hover { color: var(--ink); border-color: #33414f; }
+  button.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+  .cols { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
+  .spark { padding: 12px 14px 6px; }
+  .spark svg { width: 100%; height: 92px; display: block; }
+  .bar { fill: #2a3a49; }
+  .bar.now { fill: var(--signal); }
+  @media (max-width: 900px) {
+    .wrap { grid-template-columns: 1fr; } aside { display: none; }
+    .kpis { grid-template-columns: repeat(2, 1fr); } .cols { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside>
+    <div class="brand">lolPing 中继<small>pet-api.zyyun618.com</small></div>
+    <div class="state"><i class="dot"></i><span id="state">运行中</span></div>
+    <nav>
+      <a class="on" href="#" data-target="panel-live">实时</a>
+      <a href="#" data-target="panel-rooms">房间</a>
+      <a href="#" data-target="panel-history">历史</a>
+      <a href="#" data-target="panel-bans">封禁</a>
+    </nav>
+    <div class="meta">
+      运行 <span id="uptime">—</span><br />
+      峰值 <span id="peak">—</span> 在线<br />
+      <span id="src">演示数据</span>
+    </div>
+  </aside>
+
+  <main>
+    <div class="kpis">
+      <div class="kpi"><b id="k-online">0</b><span>在线连接</span></div>
+      <div class="kpi"><b id="k-ips">0</b><span>独立 IP</span></div>
+      <div class="kpi"><b id="k-rooms">0</b><span>活跃房间</span></div>
+      <div class="kpi" id="k-events-card"><b id="k-events">0</b><span>本分钟事件</span></div>
+    </div>
+
+    <div class="cols">
+      <section class="panel" id="panel-live">
+        <div class="head"><h2>实时会话</h2><span class="n" id="s-count">0 条</span></div>
+        <table>
+          <thead><tr>
+            <th>IP</th><th>房间</th><th class="num">时长</th><th class="num">事件</th><th class="num">流量</th><th></th>
+          </tr></thead>
+          <tbody id="rows"><tr><td colspan="6" class="empty">没有连接</td></tr></tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="panel-rooms">
+        <div class="head"><h2>近 60 分钟</h2><span class="n">事件/分</span></div>
+        <div class="spark"><svg id="spark" viewBox="0 0 300 92" preserveAspectRatio="none"></svg></div>
+        <div class="head" style="border-top:1px solid var(--line)"><h2>房间</h2></div>
+        <table><tbody id="rooms"><tr><td class="empty">暂无房间</td></tr></tbody></table>
+      </section>
+    </div>
+    <div class="cols">
+      <section class="panel" id="panel-history">
+        <div class="head"><h2>最近关闭的会话</h2><span class="n" id="h-count">—</span></div>
+        <table>
+          <thead><tr><th>IP</th><th>房间</th><th class="num">时长</th><th class="num">事件</th><th class="num">结束于</th></tr></thead>
+          <tbody id="hist"><tr><td colspan="5" class="empty">暂无记录</td></tr></tbody>
+        </table>
+      </section>
+      <section class="panel" id="panel-bans">
+        <div class="head"><h2>封禁</h2><span class="n" id="b-count">—</span></div>
+        <table><tbody id="bans"><tr><td class="empty">没有封禁记录</td></tr></tbody></table>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+const DEMO = {
+  overview: { online: 3, unique_ips_online: 3, rooms_online: 1, uptime_s: 1077, events_this_minute: 42,
+    peak_online: 5, sessions_24h: 18, unique_ips_24h: 6, events_24h: 942, rooms_24h: 3 },
+  sessions: [
+    { id: 'a1', ip: '113.87.42.19', since: Date.now()/1000 - 934, online_s: 934, events_in: 512, events_out: 1024, bytes_in: 391168, bytes_out: 782336, rooms: ['7f3c9d2a10'], agent: 'lolPing/0.6.0' },
+    { id: 'a2', ip: '113.87.42.19', since: Date.now()/1000 - 612, online_s: 612, events_in: 301, events_out: 602, bytes_in: 229912, bytes_out: 459824, rooms: ['7f3c9d2a10'], agent: 'lolPing/0.6.0' },
+    { id: 'a3', ip: '183.14.132.7', since: Date.now()/1000 - 88, online_s: 88, events_in: 44, events_out: 88, bytes_in: 33616, bytes_out: 67232, rooms: ['7f3c9d2a10'], agent: 'lolPing/0.6.0' },
+  ],
+  rooms: [{ room: '7f3c9d2a10', online: 3, events: 1842, last_seen: Date.now()/1000 }],
+  timeseries: Array.from({ length: 60 }, (_, i) => ({ minute: 0, events_in: 0, events_out: 0,
+    v: Math.round(20 + 18 * Math.sin(i / 5) + Math.random() * 12) })),
+  history: [
+    { ip: '183.14.132.7', connected_at: Math.floor(Date.now() / 1000) - 7200, seconds: 1183, events_in: 214, events_out: 428, rooms: ['7f3c9d2a10'] },
+    { ip: '113.87.42.19', connected_at: Math.floor(Date.now() / 1000) - 9400, seconds: 3021, events_in: 640, events_out: 1280, rooms: ['7f3c9d2a10'] },
+    { ip: '27.38.155.91', connected_at: Math.floor(Date.now() / 1000) - 18000, seconds: 412, events_in: 71, events_out: 142, rooms: ['7c31ee0a44'] },
+  ],
+  bans: [{ ip: '27.38.155.91', reason: 'flood', expires_at: Math.floor(Date.now() / 1000) + 86400 }],
+};
+
+const fmtDur = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h';
+const fmtBytes = (b) => b < 1024 ? b + 'B' : b < 1048576 ? (b / 1024).toFixed(0) + 'K' : (b / 1048576).toFixed(1) + 'M';
+
+const warnOffline = () => {
+  if (window.__offlineWarned) return;
+  window.__offlineWarned = true;
+  const bar = document.createElement('div');
+  bar.textContent = '未取到实时数据（认证未通过或网络异常）——下面显示的是示例值，不是真实流量';
+  bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#b3261e;color:#fff;'
+    + 'font:13px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:9px 16px;text-align:center;'
+    + 'box-shadow:0 2px 12px rgba(0,0,0,.35)';
+  document.body.prepend(bar);
+};
+
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const withToken = (p) => (TOKEN ? p + (p.includes('?') ? '&' : '?') + 'token=' + TOKEN : p);
+
+async function get(path, fallback) {
+  try {
+    const r = await fetch('api' + withToken(path), { cache: 'no-store' });
+    if (!r.ok) throw 0;
+    return await r.json();
+  } catch { warnOffline(); return fallback; }
+}
+
+async function render() {
+  const [ov, sessions, rooms, ts] = await Promise.all([
+    get('/overview', DEMO.overview), get('/sessions', DEMO.sessions),
+    get('/rooms', DEMO.rooms), get('/timeseries?minutes=60', DEMO.timeseries),
+  ]);
+  document.getElementById('src').textContent = ov === DEMO.overview ? '演示数据' : '实时';
+
+  document.getElementById('k-online').textContent = ov.online;
+  document.getElementById('k-ips').textContent = ov.unique_ips_online;
+  document.getElementById('k-rooms').textContent = ov.rooms_online;
+  document.getElementById('k-events').textContent = ov.events_this_minute;
+  document.getElementById('k-events-card').classList.toggle('warn', ov.events_this_minute > 300);
+  document.getElementById('uptime').textContent = fmtDur(ov.uptime_s);
+  document.getElementById('peak').textContent = ov.peak_online;
+  document.getElementById('s-count').textContent = sessions.length + ' 条';
+
+  // One IP with more than one connection is the first sign of a reconnect storm or a scraper.
+  const perIp = {};
+  sessions.forEach((s) => { perIp[s.ip] = (perIp[s.ip] || 0) + 1; });
+
+  const rows = document.getElementById('rows');
+  rows.innerHTML = sessions.length === 0
+    ? '<tr><td colspan="6" class="empty">没有连接</td></tr>'
+    : sessions.map((s) => `
+      <tr class="${perIp[s.ip] > 1 ? 'flag' : ''}">
+        <td class="ip">${s.ip}${perIp[s.ip] > 1 ? ' <span class="tag">×' + perIp[s.ip] + '</span>' : ''}</td>
+        <td class="ip">${(s.rooms[0] || '—')}</td>
+        <td class="num">${fmtDur(s.online_s)}</td>
+        <td class="num">${s.events_in + s.events_out}</td>
+        <td class="num">${fmtBytes(s.bytes_in + s.bytes_out)}</td>
+        <td><button class="danger" data-ip="${s.ip}">封禁</button></td>
+      </tr>`).join('');
+
+  rows.querySelectorAll('button[data-ip]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('封禁 ' + b.dataset.ip + ' 24 小时？')) return;
+      await fetch('api' + withToken('/ban'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: b.dataset.ip, minutes: 1440, reason: 'admin' }) }).catch(() => {});
+      render();
+    };
+  });
+
+  const roomBox = document.getElementById('rooms');
+  roomBox.innerHTML = rooms.length === 0 ? '<tr><td class="empty">暂无房间</td></tr>'
+    : rooms.slice(0, 6).map((r) => `<tr>
+        <td class="ip">${r.room}</td>
+        <td class="num">${r.online} 在线</td>
+        <td class="num">${r.events} 事件</td>
+      </tr>`).join('');
+
+  const [hist, bans] = await Promise.all([get('/history?limit=8', DEMO.history), get('/bans', DEMO.bans)]);
+  document.getElementById('h-count').textContent = hist.length + ' 条';
+  document.getElementById('hist').innerHTML = hist.length === 0
+    ? '<tr><td colspan="5" class="empty">暂无记录</td></tr>'
+    : hist.map((h) => `<tr>
+        <td class="ip">${h.ip}</td>
+        <td class="ip">${(h.rooms && h.rooms[0]) || '—'}</td>
+        <td class="num">${fmtDur(h.seconds || 0)}</td>
+        <td class="num">${(h.events_in || 0) + (h.events_out || 0)}</td>
+        <td class="num" style="color:#55616e">${h.connected_at ? new Date((h.connected_at + (h.seconds || 0)) * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}</td>
+      </tr>`).join('');
+
+  document.getElementById('b-count').textContent = bans.length + ' 条';
+  document.getElementById('bans').innerHTML = bans.length === 0
+    ? '<tr><td class="empty">没有封禁记录</td></tr>'
+    : bans.map((b) => `<tr>
+        <td class="ip">${b.ip}</td>
+        <td class="num" style="color:#55616e">${b.expires_at ? new Date(b.expires_at * 1000).toLocaleDateString('zh-CN') : '永久'}</td>
+        <td style="width:1%"><button data-unban="${b.ip}">解除</button></td>
+      </tr>`).join('');
+  document.querySelectorAll('#bans button[data-unban]').forEach((btn) => {
+    btn.onclick = async () => {
+      await fetch('api' + withToken('/unban'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: btn.dataset.unban }) }).catch(() => {});
+      render();
+    };
+  });
+
+  const svg = document.getElementById('spark');
+  const val = (p) => p.events_in + p.events_out || p.v || 0;
+  // The API only returns minutes that have a row; pad to a fixed 60 so the bars keep one width.
+  const raw = ts.map(val);
+  const series = raw.length >= 60 ? raw.slice(-60) : [...new Array(60 - raw.length).fill(0), ...raw];
+  const max = Math.max(1, ...series);
+  const w = 300 / 60;
+  svg.innerHTML = series.map((v, i) => {
+    const h = Math.max(1, (v / max) * 88);
+    return `<rect class="bar ${i === series.length - 1 ? 'now' : ''}" x="${(i * w + 0.6).toFixed(1)}" y="${(92 - h).toFixed(1)}"
+      width="${Math.max(1, w - 1.2).toFixed(1)}" height="${h.toFixed(1)}"><title>${v} 事件</title></rect>`;
+  }).join('');
+}
+
+document.querySelectorAll('nav a[data-target]').forEach((a) => {
+  a.onclick = (e) => {
+    e.preventDefault();
+    const panel = document.getElementById(a.dataset.target);
+    if (!panel) return;
+    try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* older engines */ }
+    panel.classList.add('flash');
+    setTimeout(() => panel.classList.remove('flash'), 1100);
+    document.querySelectorAll('nav a').forEach((n) => n.classList.toggle('on', n === a));
+  };
+});
+
+render();
+setInterval(render, 5000);
+</script>
+</body>
+</html>
