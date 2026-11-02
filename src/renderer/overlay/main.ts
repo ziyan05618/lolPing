@@ -37,6 +37,12 @@ const sounds = new SoundBank();
 const stage = new EmoteStage(emoteLayer);
 const texts = new TextStage(textLayer);
 const glows = new GlowStage(pingLayer);
+const cooldown = document.createElement('div');
+cooldown.className = 'policy-cooldown';
+document.body.append(cooldown);
+let cooldownTimer: number | null = null;
+let cooldownUntil = 0;
+let cooldownTemplate = '';
 let settings: OverlaySettings = overlaySettings(DEFAULT_SETTINGS);
 const [fallbackPing] = pingsFor([DEFAULT_CLICK_PING]);
 const volume = (): number => soundLevel(settings);
@@ -159,6 +165,27 @@ window.overlay.on('emote:spawn', (p) => {
 });
 window.overlay.on('emote:clear', (p) => stage.clear(p.owner));
 window.overlay.on('toast:show', (t) => showToast(toastLayer, t.title, t.body));
+window.overlay.on('policy:cooldown', (p) => {
+  cooldownTemplate = p.template;
+  cooldownUntil = Math.max(cooldownUntil, Date.now() + p.retryAfterMs);
+  if (cooldownTimer === null) {
+    const update = (): void => {
+      const left = cooldownUntil - Date.now();
+      if (left <= 0) {
+        cooldown.textContent = '';
+        cooldown.classList.remove('show');
+        if (cooldownTimer !== null) window.clearInterval(cooldownTimer);
+        cooldownTimer = null;
+        return;
+      }
+      const n = Math.max(1, Math.ceil(left / 1000));
+      cooldown.textContent = cooldownTemplate.replace('{n}', String(n));
+      cooldown.classList.add('show');
+    };
+    update();
+    cooldownTimer = window.setInterval(update, 100);
+  }
+});
 window.overlay.on('text:spawn', (t) => texts.spawn(t));
 window.overlay.on('mate:clear', clearMate);
 window.overlay.on('mate:fade', fadeMate);

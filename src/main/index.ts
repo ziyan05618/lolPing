@@ -47,7 +47,7 @@ import {
 import { deriveRoomKeys } from './roomCrypto';
 import { RoomHistory } from './roomHistory';
 import { PanelWindows } from './panelWindows';
-import { MAX_MEMBERS, RoomManager, type RoomToast } from './roomManager';
+import { MAX_MEMBERS, RoomManager, type PolicyCooldown, type RoomToast } from './roomManager';
 import { RoomPolicyClient } from './roomPolicyClient';
 import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
@@ -485,6 +485,10 @@ function start(): void {
   });
   overlays.on('displays', pushRoom);
   room.on('remotePing', (p) => overlays.spawnRemote(p));
+  room.on('policyCooldown', (p: PolicyCooldown) => {
+    const template = text().cooldown[p.type];
+    overlays.showPolicyCooldown({ ...p, template });
+  });
   overlays.setSharing({
     ping: (p: SharedPing) => {
       const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);

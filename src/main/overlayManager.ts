@@ -348,6 +348,12 @@ export class OverlayManager extends EventEmitter {
     this.send(screen.getPrimaryDisplay().id, 'toast:show', { title, body });
   }
 
+  showPolicyCooldown(message: { type: 'ping' | 'emote' | 'text'; retryAfterMs: number; template: string }): void {
+    const display = this.numberedList.find((d) => d.primary) ?? this.numberedList[0];
+    if (!display) return;
+    this.send(display.id, 'policy:cooldown', message);
+  }
+
   destroy(): void {
     for (const w of this.windows.values()) if (!w.isDestroyed()) w.destroy();
     this.windows.clear();

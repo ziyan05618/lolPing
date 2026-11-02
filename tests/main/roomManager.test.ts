@@ -875,12 +875,14 @@ describe('RoomManager room policy', () => {
   let service: RoomPolicyService;
   let net: FakeTransport;
   let debug: string[];
+  let cooldowns: { type: string; retryAfterMs: number }[];
 
   beforeEach(() => {
     room.quit();
     tokens = {};
     limits = { ...DEFAULT_ROOM_POLICY };
     debug = [];
+    cooldowns = [];
     net = new FakeTransport('internet');
     profile.limit = 0;
     service = {
@@ -899,6 +901,7 @@ describe('RoomManager room policy', () => {
     room.on('remotePing', (p: RemotePing) => pings.push(p));
     room.on('remoteEmote', (p: RemoteEmote) => emotes.push(p));
     room.on('remoteText', (p: RemoteText) => texts.push(p));
+    room.on('policyCooldown', (p) => cooldowns.push(p));
   });
 
   it('saves a fresh owner token on create, verifies it with the server and keeps it on leave and rejoin', async () => {
@@ -963,6 +966,7 @@ describe('RoomManager room policy', () => {
     b.emote();
     expect(emotes).toHaveLength(21);
     expect(debug.some((line) => line.includes('dropped emote'))).toBe(true);
+    expect(cooldowns).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(59_999);
     a.presence();
     a.emote();
@@ -982,6 +986,9 @@ describe('RoomManager room policy', () => {
     expect(sentMessages('lan:a').filter((m) => m.t === 'emote')).toHaveLength(20);
     a.emote();
     expect(emotes).toHaveLength(1);
+    expect(cooldowns).toHaveLength(1);
+    expect(cooldowns[0].type).toBe('emote');
+    expect(cooldowns[0].retryAfterMs).toBeGreaterThan(0);
   });
 
   it('counts pings by a sliding second and shares the text minute with alive lines', async () => {

@@ -32,6 +32,8 @@ export interface OverlayEvents {
   'wheel:move': Point & { wheel?: WheelKind };
   'wheel:release': Point & { wheel?: WheelKind };
   'wheel:cancel': null;
+  'whisper:state': { members: { peer: string; name: string }[]; target: string | null; locked: boolean; label: string | null };
+  'policy:cooldown': { type: 'ping' | 'emote' | 'text'; retryAfterMs: number; template: string };
   /** `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one. */
   'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean } & MateMark;
   /** Removes the ping kept on this display, if any: we pinged on another display, or paused. */
@@ -86,8 +88,8 @@ export interface MateMark {
 export type OverlayChannel = keyof OverlayEvents;
 
 export const OVERLAY_CHANNELS: readonly OverlayChannel[] = [
-  'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
-  'toast:show', 'text:spawn', 'mate:clear', 'mate:fade', 'mate:ticket', 'mate:said', 'mate:glow',
+  'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'whisper:state', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
+  'toast:show', 'text:spawn', 'policy:cooldown', 'mate:clear', 'mate:fade', 'mate:ticket', 'mate:said', 'mate:glow',
 ];
 
 /** Larger than any screen in CSS px: a box or a point past these is not one the overlay should draw. */
@@ -201,6 +203,8 @@ export const OVERLAY_ASSETS = 'overlay:assets';
 export const OVERLAY_PINGED = 'overlay:pinged';
 /** overlay renderer → main: {ref, x, y} of an emote the wheel just placed, so it can be shared with the room. */
 export const OVERLAY_EMOTED = 'overlay:emoted';
+export const OVERLAY_WHISPER_HOVER = 'overlay:whisper-hover';
+export const OVERLAY_WHISPER_SELECT = 'overlay:whisper-select';
 /** overlay renderer → main: true once nothing has been on the overlay for a moment, false when something shows again. */
 export const OVERLAY_IDLE = 'overlay:idle';
 

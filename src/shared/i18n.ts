@@ -618,6 +618,11 @@ const en = {
     confirmClear: 'Clear this room claim? Someone can claim the room again after this.',
     clearFailed: 'Could not clear the room claim.',
   },
+  cooldown: {
+    emote: 'Emote cooldown {n}s',
+    ping: 'Sending too fast, retry in {n}s',
+    text: 'Text cooldown {n}s',
+  },
   roomInvalid: 'That isn’t a room code.',
   roomMistyped: 'This code looks mistyped.',
   roomJoinFailed: 'Couldn’t join the room. Try again.',
@@ -1052,6 +1057,11 @@ const zh: Strings = {
     clearClaim: '清除认领',
     confirmClear: '清除这个房间的认领？清除后可以重新认领。',
     clearFailed: '无法清除房间认领。',
+  },
+  cooldown: {
+    emote: '表情冷却 {n}s',
+    ping: '发送过快，{n}s 后重试',
+    text: '文字冷却 {n}s',
   },
   roomInvalid: '这不是房间码。',
   roomMistyped: '房间码好像输错了。',

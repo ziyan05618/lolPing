@@ -90,6 +90,11 @@ export interface RemoteText {
   who?: string;
 }
 
+export interface PolicyCooldown {
+  type: 'ping' | 'emote' | 'text';
+  retryAfterMs: number;
+}
+
 export type RoomToast =
   | { kind: 'joined' | 'left' | 'disconnected' | 'kicked'; name: string }
   | { kind: 'joinedRoom'; code: string }
@@ -290,7 +295,15 @@ export class RoomManager extends EventEmitter {
     if (this.phase === 'idle') return true;
     if (!this.keys || this.paused) return false;
     const type = typeof body.t === 'string' ? roomEventType(body.t) : undefined;
-    if (type && !this.allowPolicy(this.identity.pk.toString('base64'), type)) return false;
+    if (type) {
+      const decision = this.allowPolicy(this.identity.pk.toString('base64'), type);
+      if (!decision.allowed) {
+        if (type === 'ping' || type === 'emote' || type === 'text') {
+          this.emit('policyCooldown', { type, retryAfterMs: decision.retryAfterMs } satisfies PolicyCooldown);
+        }
+        return false;
+      }
+    }
     const packet = this.seal(body);
     const sharedRoutes = new Set<Transport>();
     for (const m of this.members.values()) {
@@ -304,11 +317,11 @@ export class RoomManager extends EventEmitter {
   }
 
   /** A sliding window per public key, shared by every route and by local display and publish. */
-  private allowPolicy(pubkey: string, type: RoomEventType): boolean {
-    if (type === 'vote') return true;
+  private allowPolicy(pubkey: string, type: RoomEventType): { allowed: boolean; retryAfterMs: number } {
+    if (type === 'vote') return { allowed: true, retryAfterMs: 0 };
     const limit = type === 'emote' ? this.policyState.limits.emote_per_minute
       : type === 'text' ? this.policyState.limits.text_per_minute : this.policyState.limits.ping_per_second;
-    if (limit === 0) return true;
+    if (limit === 0) return { allowed: true, retryAfterMs: 0 };
     const now = this.deps.now();
     const window = type === 'ping' ? 1000 : 60_000;
     const key = `${pubkey}:${type}`;
@@ -316,10 +329,10 @@ export class RoomManager extends EventEmitter {
     this.policyWindows.set(key, times);
     if (times.length >= limit) {
       this.deps.debug?.(`Room policy dropped ${type} from ${pubkey}`);
-      return false;
+      return { allowed: false, retryAfterMs: Math.max(0, window - (now - times[0])) };
     }
     times.push(now);
-    return true;
+    return { allowed: true, retryAfterMs: 0 };
   }
 
   async setPolicy(raw: unknown): Promise<RoomPolicyResult> {
@@ -680,7 +693,7 @@ export class RoomManager extends EventEmitter {
       const quotaType = t.shared ? eventType ?? 'ping' : type;
       // A missing tag is legacy traffic; a label for another class must not bypass its quota.
       if (t.shared && eventType !== undefined && eventType !== type) return;
-      if (!this.allowPolicy(m.policyKey, quotaType)) return;
+      if (!this.allowPolicy(m.policyKey, quotaType).allowed) return;
     }
     // Emote still requests travel in their own bucket: a flood of wants still meets a wall. A paused lolPing neither
     // fetches nor serves stills. An app on another protocol generation can't have sent these (its validator drops
