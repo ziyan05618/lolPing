@@ -14,7 +14,6 @@ export const SETTINGS_CH = {
   emoteFx: 'emote:fx',
   about: 'app:about',
   openFolder: 'app:openSettingsFolder',
-  openProject: 'app:openProjectPage',
   retryHelper: 'app:retryHelper',
   capture: 'app:capture',
   openAccessibility: 'app:openAccessibility',

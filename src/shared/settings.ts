@@ -57,6 +57,8 @@ export interface Settings {
   muted: boolean;
   tickSound: boolean;
   launchAtStartup: boolean;
+  /** Run elevated, so the wheel also opens over windows owned by an administrator. Windows only. */
+  runAsAdmin: boolean;
   language: LanguagePref;
   /** Shown under your pings on other people's screens. */
   displayName: string;
@@ -122,6 +124,7 @@ export const DEFAULT_SETTINGS: Settings = {
   muted: false,
   tickSound: true,
   launchAtStartup: false,
+  runAsAdmin: false,
   language: 'auto',
   displayName: 'Player',
   tagColor: 0,
@@ -131,7 +134,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rejoinRoom: true,
   lastRoomCode: null,
   roomMuted: false,
-  emoteTrigger: 'ctrl',
+  emoteTrigger: 'mouse5',
   emoteClick: false,
   emoteWheel: [...DEFAULT_EMOTE_WHEEL],
   clickEmoteId: DEFAULT_CLICK_EMOTE,
@@ -157,7 +160,7 @@ export const LIMITS = {
 } as const;
 
 type NumKey = keyof typeof LIMITS;
-type BoolKey = 'enabledOnStart' | 'clickPing' | 'gameCheck' | 'keepLastPing' | 'muted' | 'tickSound' | 'launchAtStartup' | 'allowInternet' | 'rejoinRoom' | 'roomMuted'
+type BoolKey = 'enabledOnStart' | 'clickPing' | 'gameCheck' | 'keepLastPing' | 'muted' | 'tickSound' | 'launchAtStartup' | 'runAsAdmin' | 'allowInternet' | 'rejoinRoom' | 'roomMuted'
   | 'emoteClick' | 'emoteSound' | 'friendEmotes' | 'autoUpdateCheck';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -182,7 +185,7 @@ function triggerKey(raw: unknown, platform: Platform, fallback: TriggerKey): Tri
 const trigger = (raw: unknown, platform: Platform): TriggerKey => triggerKey(raw, platform, DEFAULT_SETTINGS.trigger);
 
 /** The emote key as stored, before the clash rules: 'off', or a trigger key with Ctrl as the fallback. */
-const emoteKey = (raw: unknown, platform: Platform): EmoteTriggerKey => (raw === 'off' ? 'off' : triggerKey(raw, platform, 'ctrl'));
+const emoteKey = (raw: unknown, platform: Platform): EmoteTriggerKey => (raw === 'off' ? 'off' : triggerKey(raw, platform, 'mouse5'));
 
 /** The Caps Lock key's code: the named 'capslock' trigger and a custom { vk: 0x14 } are one physical key. */
 const CAPS_LOCK_VK = 0x14;
@@ -354,6 +357,7 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     muted: bool(r.muted, 'muted'),
     tickSound: bool(r.tickSound, 'tickSound'),
     launchAtStartup: bool(r.launchAtStartup, 'launchAtStartup'),
+    runAsAdmin: bool(r.runAsAdmin, 'runAsAdmin'),
     language: (LANGUAGE_PREFS as readonly unknown[]).includes(r.language) ? (r.language as LanguagePref) : DEFAULT_SETTINGS.language,
     displayName: typeof r.displayName === 'string' ? sanitizeName(r.displayName, fallbackName) : fallbackName,
     tagColor: isTagColor(r.tagColor) ? r.tagColor : isTagColor(identity.color) ? identity.color : 0,

@@ -25,7 +25,6 @@ const api: SettingsApi = {
   setEmoteFx: (id, fx) => ipcRenderer.invoke(SETTINGS_CH.emoteFx, id, fx),
   getAbout: () => ipcRenderer.invoke(SETTINGS_CH.about),
   openSettingsFolder: () => ipcRenderer.invoke(SETTINGS_CH.openFolder),
-  openProjectPage: () => ipcRenderer.invoke(SETTINGS_CH.openProject),
   retryHelper: () => ipcRenderer.invoke(SETTINGS_CH.retryHelper),
   setCapturing: (on) => ipcRenderer.invoke(SETTINGS_CH.capture, on),
   openAccessibility: () => ipcRenderer.invoke(SETTINGS_CH.openAccessibility),

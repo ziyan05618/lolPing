@@ -2,6 +2,7 @@ import { Dropdown, FluentProvider, motionTokens, Option, webDarkTheme, webLightT
 import {
   ArrowMove24Regular, ArrowSync24Regular, CursorClick24Regular, DataPie24Regular, Games24Regular, Info24Regular, Keyboard24Regular, MusicNote224Regular, Pin24Regular,
   Power24Regular, ResizeLarge24Regular, Rocket24Regular, Settings24Regular, Speaker224Regular, SpeakerMute24Regular,
+  ShieldCheckmark24Regular,
   Apps24Regular, Timer24Regular, Cursor24Regular, Emoji24Regular, LocalLanguage24Regular, PeopleCommunity24Regular,
   Sparkle24Regular,
 } from '@fluentui/react-icons';
@@ -284,6 +285,10 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
         <div className="section" id="app">{t.navApp}</div>
         <SwitchRow icon={<Rocket24Regular />} title={t.launchAtStartup} description={t.launchAtStartupDesc}
           checked={s.launchAtStartup} onChange={(v) => void update({ launchAtStartup: v })} />
+        {PLATFORM === 'win' ? (
+          <SwitchRow icon={<ShieldCheckmark24Regular />} title={t.runAsAdmin} description={t.runAsAdminDesc}
+            checked={s.runAsAdmin} onChange={(v) => void update({ runAsAdmin: v })} />
+        ) : null}
         <SettingRow icon={<LocalLanguage24Regular />} title={t.language} description={t.languageDesc}>
           <Dropdown
             style={{ minWidth: 170 }}

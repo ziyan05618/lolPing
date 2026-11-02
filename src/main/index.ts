@@ -32,6 +32,7 @@ import { updateErrorText, type UpdateState } from '../shared/update';
 import { registerAppScheme, serveAppScheme } from './appProtocol';
 import { resolveTarget, toShared } from './displayNumbers';
 import { EmoteCache } from './emoteCache';
+import { isElevated, relaunchElevated, setElevatedAutostart } from './elevation';
 import { EmoteLibrary, resolveEmoteArt } from './emoteLibrary';
 import { EmoteTransfer } from './emoteTransfer';
 import { isFile } from './fileState';
@@ -220,6 +221,21 @@ function start(): void {
   if (kept.length !== settings.customEmotes.length) settings = store.update({ customEmotes: kept });
   // The language setting, or the system display language when it's 'auto'.
   const text = (): Strings => strings(resolveLang(settings.language, app.getLocale()), PLATFORM);
+  // An elevated copy is the only way a low-level hook sees clicks on windows owned by an administrator (UIPI).
+  // A Run-key entry cannot start an elevated app, so that combination uses a logon task instead.
+  if (PLATFORM === 'win') {
+    if (settings.runAsAdmin && app.isPackaged && !isElevated()) {
+      if (relaunchElevated()) {
+        app.releaseSingleInstanceLock();
+        app.quit();
+        return;
+      }
+      void dialog.showMessageBox({ type: 'warning', message: text().runAsAdminDenied });
+    }
+    if (settings.runAsAdmin && settings.launchAtStartup && app.isPackaged) setElevatedAutostart(true);
+    // A Run-key entry is ignored for an elevated app, so an earlier plain entry must go.
+    if (settings.runAsAdmin && app.isPackaged) app.setLoginItemSettings({ openAtLogin: false });
+  }
   let enabled = settings.enabledOnStart;
   let quitting = false; // read by pushStatus: once true, the tray and overlays are gone
   let capturing = false; // the settings page is listening for a key, so the helper must stay suspended
@@ -1105,7 +1121,21 @@ function start(): void {
       room.setInternetAllowed(s.allowInternet);
       pushRoom();
     }
-    if (app.isPackaged && s.launchAtStartup !== previous.launchAtStartup) {
+    // Turning the admin copy on restarts the app elevated: from there the hook also sees elevated windows.
+    // Only the installed build can do it: a dev build's pages come from the Vite server, which an elevated
+    // copy (started through the UAC broker, without this process's environment) cannot reach.
+    if (PLATFORM === 'win' && s.runAsAdmin !== previous.runAsAdmin && s.runAsAdmin && !isElevated()) {
+      if (!app.isPackaged) {
+        void dialog.showMessageBox({ type: 'info', message: text().runAsAdminDevOnly });
+      } else if (relaunchElevated()) {
+        app.releaseSingleInstanceLock();
+        app.quit();
+        return;
+      } else {
+        void dialog.showMessageBox({ type: 'warning', message: text().runAsAdminDenied });
+      }
+    }
+    if (app.isPackaged && (s.launchAtStartup !== previous.launchAtStartup || s.runAsAdmin !== previous.runAsAdmin)) {
       // macOS ignores args, and a Mac launch starts in the menu bar anyway.
       if (IS_LINUX) {
         try { setLinuxAutostart(s.launchAtStartup); }
@@ -1114,7 +1144,15 @@ function start(): void {
           void dialog.showMessageBox({ type: 'error', message: String(err) });
         }
       }
-      else app.setLoginItemSettings(IS_MAC ? { openAtLogin: s.launchAtStartup } : { openAtLogin: s.launchAtStartup, args: ['--hidden'] });
+      else if (PLATFORM === 'win' && s.runAsAdmin) {
+        // A Run-key entry cannot start an elevated app: the logon task takes over.
+        app.setLoginItemSettings({ openAtLogin: false });
+        setElevatedAutostart(s.launchAtStartup);
+      }
+      else {
+        if (PLATFORM === 'win') setElevatedAutostart(false);
+        app.setLoginItemSettings(IS_MAC ? { openAtLogin: s.launchAtStartup } : { openAtLogin: s.launchAtStartup, args: ['--hidden'] });
+      }
     }
   });
 

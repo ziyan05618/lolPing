@@ -64,7 +64,7 @@ describe('commands', () => {
   it('builds a flat config command for named triggers', () => {
     expect(configCommand(DEFAULT_SETTINGS, true)).toEqual({
       type: 'config', trigger: 'alt', triggerVk: 0, clickPing: false, gameCheck: true,
-      emoteTrigger: 'ctrl', emoteTriggerVk: 0, emoteClick: false, askTrigger: 'off', askTriggerVk: 0, askClick: false,
+      emoteTrigger: 'mouse5', emoteTriggerVk: 0, emoteClick: false, askTrigger: 'off', askTriggerVk: 0, askClick: false,
       askDoubleTap: false, dragThresholdPx: 8,
       toggleMods: 3, toggleVk: 0x50, textMods: 2, textVk: 0, panelVk: 0, enabled: true,
     });
@@ -153,7 +153,7 @@ describe('commands', () => {
 
   it('keeps the emote key while only rooms are off', () => {
     const c = configCommand({ ...DEFAULT_SETTINGS, features: { ...DEFAULT_FEATURES, rooms: false } }, true);
-    expect(c).toMatchObject({ emoteTrigger: 'ctrl' });
+    expect(c).toMatchObject({ emoteTrigger: 'mouse5' });
   });
 
   it('serializes one command per line', () => {

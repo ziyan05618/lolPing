@@ -60,11 +60,11 @@ describe('SettingsStore', () => {
     expect(store.emoteKeyClashed).toBe(true);
   });
 
-  it('does not flag an upgrading Ctrl user, whose emote key just ends up off', () => {
+  it('gives an upgrading file the default emote key without flagging a clash', () => {
     const dir = tempDir();
     writeFileSync(join(dir, 'settings.json'), JSON.stringify({ trigger: 'ctrl' })); // a 0.4.0 file: no emote keys
     const store = new SettingsStore(dir);
-    expect(store.load().emoteTrigger).toBe('off');
+    expect(store.load().emoteTrigger).toBe('mouse5');
     expect(store.emoteKeyClashed).toBe(false);
   });
 
@@ -91,7 +91,7 @@ describe('SettingsStore', () => {
     writeFileSync(join(dir, 'settings.json'), JSON.stringify({ version: 1, volume: 30 }));
     new SettingsStore(dir, 10).load();
     await sleep(80);
-    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toMatchObject({ emoteTrigger: 'ctrl', emoteSizePx: 150, customEmotes: [] });
+    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toMatchObject({ emoteTrigger: 'mouse5', emoteSizePx: 150, customEmotes: [] });
   });
 
   it('emits change with the normalized value', () => {

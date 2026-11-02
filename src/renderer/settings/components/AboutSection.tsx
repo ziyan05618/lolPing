@@ -38,7 +38,6 @@ export function AboutSection({ icon, update }: { icon: ReactNode; update: Update
             {update.phase === 'checking' ? t.checking : t.checkForUpdates}
           </Button>
         ) : null}
-        <Button onClick={() => void api.openProjectPage()}>{t.githubPage}</Button>
         <Button onClick={() => void api.openSettingsFolder()}>{t.openSettingsFolder}</Button>
       </SettingRow>
       {update ? <UpdateCard update={update} /> : null}
