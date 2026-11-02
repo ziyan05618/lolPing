@@ -60,6 +60,8 @@ export interface PresenceMsg extends Base {
   nf: RoomFeatureOff[];
   /** Added in 0.5.2: the Ed25519 public key, raw, in base64. The peer id is its hash, and every message but a chunk is signed with it. */
   pk?: string;
+  /** X25519 public key for pairwise whisper channels, authenticated by the presence signature. */
+  xk?: string;
 }
 export interface PingMsg extends Base {
   t: 'ping';
@@ -80,6 +82,8 @@ export interface EmoteMsg extends Base {
   d: number;
   x: number;
   y: number;
+  /** Pairwise recipient. Such a message is only published on the derived whisper topic. */
+  to?: string;
 }
 /** Added after 0.5.1: older apps safely drop it as an unknown type. */
 export interface TextMsg extends Base {
@@ -199,12 +203,13 @@ export function validateMessage(raw: unknown): RoomMessage | null {
   const base = { peer, seq, ts };
   switch (t) {
     case 'presence': {
-      const { proto, app, name, color, rgb, status, em, nf, pk } = raw;
+      const { proto, app, name, color, rgb, status, em, nf, pk, xk } = raw;
       if (!isUint(proto) || typeof app !== 'string' || app.length > MAX_APP_VERSION || typeof name !== 'string') return null;
       if (!isTagColor(color) || !STATUSES.includes(status as MemberStatus)) return null;
       const presence: PresenceMsg = {
         t, ...base, proto, app, name: sanitizeName(name.slice(0, 256)), color, status: status as MemberStatus,
         em: emList(em), nf: nfList(nf), ...(typeof pk === 'string' && PK_RE.test(pk) ? { pk } : {}),
+        ...(typeof xk === 'string' && PK_RE.test(xk) ? { xk } : {}),
       };
       // A malformed custom colour is dropped rather than the whole presence: an unreadable tag beats a missing member.
       return isTagRgb(rgb) ? { ...presence, rgb } : presence;
@@ -216,12 +221,13 @@ export function validateMessage(raw: unknown): RoomMessage | null {
       return { t, ...base, ping, d: d as number, x, y };
     }
     case 'emote': {
-      const { e, fx, d, x, y } = raw;
+      const { e, fx, d, x, y, to } = raw;
       if (!isEmoteRefShape(e) || !Number.isInteger(d) || (d as number) < 1 || (d as number) > MAX_DISPLAY) return null;
       if (!isUnit(x) || !isUnit(y)) return null;
       // A malformed effect is dropped rather than the whole emote, the way a malformed tag colour is: the sender's
       // moment still plays, as the plain pop.
-      return { t, ...base, e, d: d as number, x, y, ...(isEmoteFx(fx) ? { fx } : {}) };
+      if (to !== undefined && (typeof to !== 'string' || !PEER_RE.test(to))) return null;
+      return { t, ...base, e, d: d as number, x, y, ...(isEmoteFx(fx) ? { fx } : {}), ...(to === undefined ? {} : { to }) };
     }
     case 'text': {
       const { text, d, x, y } = raw;

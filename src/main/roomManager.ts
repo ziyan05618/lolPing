@@ -13,7 +13,8 @@ import {
 import { RateLimiter } from './rateLimiter';
 import { ReplayGuard } from './replayGuard';
 import {
-  makeIdentity, open, peerIdOf, publicKeyOf, seal, signBody, verifyBody, type RoomIdentity, type RoomKeys,
+  makeIdentity, open, peerIdOf, publicKeyOf, publicWhisperKeyOf, seal, signBody, verifyBody, whisperMessageKey,
+  whisperSecret, whisperTopic, type RoomIdentity, type RoomKeys,
 } from './roomCrypto';
 import type { PeerKey, Transport, TransportStatus } from './transport';
 import type { RoomPolicyService } from './roomPolicyClient';
@@ -142,7 +143,14 @@ interface Member {
   paths: Partial<Record<Transport['kind'], { key: PeerKey; seenAt: number }>>;
   /** The key their signed presence proved; null for a member on 0.5.1 or older, who signs nothing. */
   pk: KeyObject | null;
+  /** X25519 public key authenticated by signed presence; absent on old clients. */
+  xpk: KeyObject | null;
   policyKey: string;
+}
+
+interface WhisperChannel {
+  peer: string;
+  key: Buffer;
 }
 
 /**
@@ -165,6 +173,7 @@ export class RoomManager extends EventEmitter {
   private session = 0;
   private seq = 0;
   private members = new Map<string, Member>();
+  private whisperChannels = new Map<string, WhisperChannel>();
   private answered = new Set<PeerKey>();
   /** Per peer ID: stale presences seen, and when the last one came. Never turns into a member. */
   private staleStrikes = new Map<string, { count: number; at: number }>();
@@ -221,7 +230,7 @@ export class RoomManager extends EventEmitter {
     this.ballotLimiter = new RateLimiter(deps.now);
     this.relayCap = new RateLimiter(deps.now);
     for (const t of deps.transports) {
-      t.on('packet', (peer: PeerKey, packet: Uint8Array, type?: RoomEventType) => this.onPacket(t, peer, packet, type));
+      t.on('packet', (peer: PeerKey, packet: Uint8Array, type?: RoomEventType, topic?: string) => this.onPacket(t, peer, packet, type, topic));
       t.on('peerGone', (peer: PeerKey) => this.onPeerGone(t, peer));
       t.on('status', (s: TransportStatus) => {
         // A fresh socket: tell everyone now rather than at the next round. Relays say so per relay, with linkUp.
@@ -260,8 +269,9 @@ export class RoomManager extends EventEmitter {
   }
 
   /** `fx` is the effect stored on the emote's entry here; absent (the plain pop) leaves the field out for the older peers. */
-  sendEmote(e: EmoteRef, shared: { d: number; x: number; y: number }, fx?: number): boolean {
-    return this.sendShared({ t: 'emote', e, ...shared, ...(fx !== undefined ? { fx } : {}) });
+  sendEmote(e: EmoteRef, shared: { d: number; x: number; y: number }, fx?: number, to?: string): boolean {
+    const body = { t: 'emote', e, ...shared, ...(fx !== undefined ? { fx } : {}) };
+    return to ? this.sendWhisperEmote(to, { ...body, to }) : this.sendShared(body);
   }
 
   sendText(text: string, shared: { d: number; x: number; y: number }): boolean {
@@ -314,6 +324,29 @@ export class RoomManager extends EventEmitter {
     }
     for (const t of sharedRoutes) if (this.relayCap.allow(t.kind, RELAY_PING_RATE, RELAY_PING_BURST)) t.broadcast(packet, type);
     return true;
+  }
+
+  private sendWhisperEmote(to: string, body: Record<string, unknown>): boolean {
+    if (this.phase === 'idle' || !this.keys || this.paused || !this.members.has(to)) return false;
+    const entry = [...this.whisperChannels].find(([, value]) => value.peer === to);
+    const target = this.members.get(to);
+    const internetPath = target?.paths.internet;
+    const relay = [...this.active].find((t) => t.kind === 'internet' && t.shared && t.broadcastOn);
+    if (!entry || !internetPath || this.deps.now() - internetPath.seenAt >= ALIVE_MS.internet || !relay?.broadcastOn) return false;
+    const [topic, channel] = entry;
+    const type: RoomEventType = 'emote';
+    const decision = this.allowPolicy(this.identity.pk.toString('base64'), type);
+    if (!decision.allowed) {
+      this.emit('policyCooldown', { type, retryAfterMs: decision.retryAfterMs } satisfies PolicyCooldown);
+      return false;
+    }
+    try {
+      const packet = this.sealWith(whisperMessageKey(channel.key), body);
+      if (!this.relayCap.allow(relay.kind, RELAY_PING_RATE, RELAY_PING_BURST)) return false;
+      return relay.broadcastOn(topic, packet, type);
+    } catch {
+      return false;
+    }
   }
 
   /** A sliding window per public key, shared by every route and by local display and publish. */
@@ -415,6 +448,18 @@ export class RoomManager extends EventEmitter {
     const route = m && this.route(m);
     if (!route) return null;
     return route.transport.shared ? 'shared' : 'lan';
+  }
+
+  whisperMembers(): { peer: string; name: string }[] {
+    const now = this.deps.now();
+    const relayAvailable = [...this.active].some((t) =>
+      t.kind === 'internet' && t.shared && t.status === 'ok' && t.broadcastOn !== undefined,
+    );
+    if (!relayAvailable) return [];
+    return [...this.members.values()]
+      .filter((m) => m.paths.internet !== undefined && now - m.paths.internet.seenAt < ALIVE_MS.internet
+        && [...this.whisperChannels.values()].some((channel) => channel.peer === m.peer))
+      .map((m) => ({ peer: m.peer, name: m.name }));
   }
 
   /** Seals and sends `body` straight to one member over its LAN path. Nothing goes when LAN isn't what reaches them. */
@@ -541,6 +586,7 @@ export class RoomManager extends EventEmitter {
     this.identity = makeIdentity(this.deps.randomBytes(32));
     this.self = peerIdOf(this.identity.pk);
     this.seq = 0;
+    this.whisperChannels.clear();
     this.phase = 'joining';
     this.code = code;
     this.signedGuard = new ReplayGuard(this.deps.now);
@@ -602,8 +648,18 @@ export class RoomManager extends EventEmitter {
   private stop(): void {
     this.session++;
     if (this.keys) {
+      const memberToken = this.deps.memberToken?.();
+      const service = this.deps.policy;
+      const leave = service?.leave;
+      if (memberToken && this.internetAllowed && service && leave) {
+        const topic = this.keys.relayTopic;
+        const request = this.policyMembershipTail.then(() => leave(topic, memberToken));
+        this.policyMembershipTail = request.then(() => undefined, () => undefined);
+        void request.catch(() => undefined);
+      }
       const bye = this.seal({ t: 'bye' });
       for (const t of this.active) this.spread(t, bye);
+      for (const t of this.active) t.setWhisperTopics?.([]);
       for (const t of this.active) t.stop();
     }
     this.active.clear();
@@ -615,6 +671,7 @@ export class RoomManager extends EventEmitter {
     this.code = this.keys = null;
     for (const m of this.members.keys()) this.emit('memberGone', m);
     this.members.clear();
+    this.whisperChannels.clear();
     this.answered.clear();
     this.staleStrikes.clear();
     this.timedOut.clear();
@@ -652,9 +709,11 @@ export class RoomManager extends EventEmitter {
     this.emitState();
   }
 
-  private onPacket(t: Transport, key: PeerKey, packet: Uint8Array, eventType?: RoomEventType): void {
+  private onPacket(t: Transport, key: PeerKey, packet: Uint8Array, eventType?: RoomEventType, topic?: string): void {
     if (!this.keys) return;
-    const plain = open(this.keys.msgKey, packet);
+    const privateChannel = t.shared && topic !== undefined && topic !== this.keys.relayTopic ? this.whisperChannels.get(topic) : undefined;
+    if (t.shared && topic !== undefined && topic !== this.keys.relayTopic && !privateChannel) return;
+    let plain = open(privateChannel ? whisperMessageKey(privateChannel.key) : this.keys.msgKey, packet);
     const decoded = plain && decodeSigned(plain);
     if (!decoded || decoded.msg.peer === this.self) return;
     const { msg, body, sig } = decoded;
@@ -687,6 +746,11 @@ export class RoomManager extends EventEmitter {
       return;
     }
     if (!m) return;
+    if (privateChannel) {
+      if (msg.t !== 'emote' || msg.to !== this.self || msg.peer !== privateChannel.peer) return;
+    } else if (msg.t === 'emote' && msg.to !== undefined) {
+      return;
+    }
     this.heard(m, t, key);
     const type = roomEventType(msg.t);
     if (type && msg.t !== 'ballot') {
@@ -756,7 +820,7 @@ export class RoomManager extends EventEmitter {
       m = {
         peer: msg.peer, name: msg.name, color: msg.color, rgb: msg.rgb ?? null, status: msg.status,
         needsUpdate: false, noEmotes: false, noChat: false, textOff: false, votesOff: false, muted: false, em: [],
-        firstSeen: this.deps.now(), viaInternet: false, paths: {}, pk: null,
+        firstSeen: this.deps.now(), viaInternet: false, paths: {}, pk: null, xpk: null,
         policyKey: pk && msg.pk ? msg.pk : key,
       };
       this.members.set(m.peer, m);
@@ -764,6 +828,7 @@ export class RoomManager extends EventEmitter {
     }
     if (pk) {
       m.pk = pk;
+      m.xpk = msg.xk ? publicWhisperKeyOf(Buffer.from(msg.xk, 'base64')) : null;
       if (msg.pk) m.policyKey = msg.pk;
       this.boundIds.add(m.peer);
     }
@@ -777,6 +842,7 @@ export class RoomManager extends EventEmitter {
     m.textOff = msg.nf.includes('text');
     m.votesOff = msg.nf.includes('votes');
     m.em = msg.em;
+    this.syncWhisperTopics();
     // Every presence, so a hash whose assembly gave up is asked for again: EmoteTransfer skips what is already here.
     // A paused lolPing neither fetches nor serves stills; the next presence after unpausing starts prefetch again.
     if (!this.paused) this.emit('emotes', m.peer, [...m.em]);
@@ -816,6 +882,7 @@ export class RoomManager extends EventEmitter {
 
   private remove(m: Member, kind: 'left' | 'disconnected' | 'kicked'): void {
     this.members.delete(m.peer);
+    this.syncWhisperTopics();
     this.limiter.forget(m.peer);
     this.ballotLimiter.forget(m.peer);
     this.transferLimiter.forget(m.peer);
@@ -845,6 +912,23 @@ export class RoomManager extends EventEmitter {
     return null;
   }
 
+  /** Builds only pairwise channels for peers that proved an X25519 key in signed presence. */
+  private syncWhisperTopics(): void {
+    const next = new Map<string, WhisperChannel>();
+    for (const m of this.members.values()) {
+      if (!m.xpk) continue;
+      try {
+        const secret = whisperSecret(this.identity.xkey, m.xpk);
+        next.set(whisperTopic(secret, this.self, m.peer), { peer: m.peer, key: secret });
+      } catch {
+        // A malformed or unsupported peer key simply leaves private emotes unavailable for that peer.
+      }
+    }
+    this.whisperChannels = next;
+    const topics = [...next.keys()];
+    for (const t of this.active) t.setWhisperTopics?.(topics);
+  }
+
   private path(m: Member, now: number): MemberPath {
     const r = this.route(m);
     if (r) return r.transport.kind;
@@ -859,7 +943,7 @@ export class RoomManager extends EventEmitter {
     const p = this.deps.profile();
     return this.seal({
       t: 'presence', proto: PROTOCOL_VERSION, app: this.deps.appVersion, name: p.name, color: p.color, status: this.status(),
-      em: [...this.deps.announceEmotes()], pk: this.identity.pk.toString('base64'),
+      em: [...this.deps.announceEmotes()], pk: this.identity.pk.toString('base64'), xk: this.identity.xk.toString('base64'),
       // Left out when nothing is off, so a presence to an older peer carries nothing new.
       ...(p.nf.length ? { nf: [...p.nf] } : {}),
       // Left out rather than sent as null: a peer on an older build ignores it either way, and this keeps the packet small.
@@ -916,11 +1000,15 @@ export class RoomManager extends EventEmitter {
   }
 
   private seal(body: Record<string, unknown>): Buffer {
+    return this.sealWith(this.keys!.msgKey, body);
+  }
+
+  private sealWith(key: Buffer, body: Record<string, unknown>): Buffer {
     const msg = { peer: this.self, seq: ++this.seq, ts: this.deps.now(), ...body } as RoomMessage;
     const bytes = encodeMessage(msg);
     if (msg.t === 'chunk') return seal(this.keys!.msgKey, bytes);
     const signed = joinSigned(new TextDecoder().decode(bytes), signBody(this.identity, bytes));
-    return seal(this.keys!.msgKey, new TextEncoder().encode(signed));
+    return seal(key, new TextEncoder().encode(signed));
   }
 
   private emitState(): void {

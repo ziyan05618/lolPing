@@ -260,6 +260,11 @@ Result Decision::setStaleWatch(bool on) {
   return Result{};
 }
 
+Result Decision::setWhisperWatch(bool on) {
+  whisperWatch_ = on;
+  return {};
+}
+
 void Decision::setFullscreenProbe(std::function<bool(int x, int y)> probe) { fullscreenProbe_ = std::move(probe); }
 
 Result Decision::releasePanel() {
@@ -362,6 +367,12 @@ void Decision::onKeyDown(const InputEvent& e, Result& r) {
   const bool repeat = keyDown_[vk];
   keyDown_[vk] = true;
   onTapKeyDown(vk, repeat, e.timeMs);
+  if (active() && whisperWatch_ && vk == 0xC0 && (mods() & (ModCtrl | ModAlt | ModWin)) == 0) {
+    r.swallow = true;
+    swallowKeyUps_.insert(vk);
+    if (!repeat) r.emits.push_back(Emit{Emit::Kind::WhisperToggle});
+    return;
+  }
   // Windows stops a key's auto-repeat once another key goes down, so a key press while the panel key is held
   // is proof it is still held: keep the repeat watchdog from hiding the panel.
   if (panelDown_ != 0 && vk != panelDown_) lastPanelMs_ = e.timeMs;

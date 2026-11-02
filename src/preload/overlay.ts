@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EmoteRef } from '../shared/emotes';
 import {
-  OVERLAY_ASSETS, OVERLAY_CHANNELS, OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, type OverlayChannel, type OverlayEvents,
+  OVERLAY_ASSETS, OVERLAY_CHANNELS, OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, OVERLAY_WHISPER_HOVER, OVERLAY_WHISPER_SELECT,
+  type OverlayChannel, type OverlayEvents,
 } from '../shared/ipc';
 import type { PingId } from '../shared/pings';
 
@@ -21,6 +22,8 @@ const api = {
   reportEmote(ref: EmoteRef, x: number, y: number): void {
     ipcRenderer.send(OVERLAY_EMOTED, { ref, x, y });
   },
+  reportWhisperHover(index: number | null): void { ipcRenderer.send(OVERLAY_WHISPER_HOVER, index); },
+  selectWhisper(index: number): void { ipcRenderer.send(OVERLAY_WHISPER_SELECT, index); },
   /** Nothing is on this overlay any more (true), or something is again (false). */
   reportIdle(idle: boolean): void {
     ipcRenderer.send(OVERLAY_IDLE, idle);

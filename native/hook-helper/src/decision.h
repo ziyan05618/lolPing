@@ -61,7 +61,7 @@ struct Emit {
   // released after its key. AskWords: a double tap of the ask key, at the pointer. Scroll: the wheel turned
   // while the stale watch is on, at the pointer.
   enum class Kind {
-    WheelOpen, WheelMove, WheelRelease, Click, Cancel, Toggled, TextRequested, Panel, TriggerUp, AskWords, Scroll
+    WheelOpen, WheelMove, WheelRelease, Click, Cancel, Toggled, TextRequested, Panel, TriggerUp, AskWords, Scroll, WhisperToggle
   } kind;
   int x = 0;
   int y = 0;
@@ -116,6 +116,7 @@ class Decision {
   // Scroll events are reported only while this is on (the teammate has marks on screen). It never touches a
   // gesture, which is why it is not a config field.
   Result setStaleWatch(bool on);
+  Result setWhisperWatch(bool on);
 
   // Resync with the OS: forget keys we believe are down but isDown(vk) says are up
   // (key-ups the hook never saw: Win+L, Ctrl+Alt+Del, UAC, hook reinstall). Never marks a key as down.
@@ -205,6 +206,7 @@ class Decision {
   uint32_t tapVk_ = 0;  // the physical key of the double tap in progress
   uint64_t tapMs_ = 0;  // when the last step happened
   bool staleWatch_ = false;
+  bool whisperWatch_ = false;
   bool scrollSent_ = false;  // a scroll has been reported since the watch went on
   uint64_t lastScrollMs_ = 0;
 };

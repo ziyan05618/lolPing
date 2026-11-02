@@ -1,5 +1,5 @@
 import {
-  createCipheriv, createDecipheriv, createHash, createPrivateKey, createPublicKey, hkdfSync, randomBytes, scrypt, sign, verify,
+  createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, hkdfSync, randomBytes, scrypt, sign, verify,
   type KeyObject,
 } from 'node:crypto';
 
@@ -16,6 +16,11 @@ export interface RoomKeys {
   msgKey: Buffer;
   /** The relay topic: 64 hex characters that say nothing without the code. */
   relayTopic: string;
+}
+
+export interface WhisperIdentity {
+  publicKey: Buffer;
+  privateKey: KeyObject;
 }
 
 /** Room code → keys. scrypt makes guessing a code from a relay topic impractical; HKDF gives each key one job. */
@@ -57,17 +62,22 @@ export function open(key: Buffer, packet: Uint8Array): Buffer | null {
 export interface RoomIdentity {
   pk: Buffer;
   key: KeyObject;
+  xk: Buffer;
+  xkey: KeyObject;
 }
 
 // DER wrappers that turn a raw 32-byte Ed25519 seed or public key into what node:crypto imports.
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const X25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex');
+const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
 
 /** The identity grown from a 32-byte seed; the caller passes fresh random bytes, tests a fixed seed. */
 export function makeIdentity(seed: Uint8Array): RoomIdentity {
   const key = createPrivateKey({ key: Buffer.concat([PKCS8_PREFIX, seed]), format: 'der', type: 'pkcs8' });
   const spki = createPublicKey(key).export({ format: 'der', type: 'spki' });
-  return { pk: spki.subarray(SPKI_PREFIX.length), key };
+  const whisper = makeWhisperIdentity(createHash('sha256').update(seed).update('lolping/whisper/v1').digest());
+  return { pk: spki.subarray(SPKI_PREFIX.length), key, xk: whisper.publicKey, xkey: whisper.privateKey };
 }
 
 /** A member's peer id: the first 16 hex characters of SHA-256 of their public key, so nobody else can claim it. */
@@ -81,6 +91,36 @@ export function publicKeyOf(pk: Uint8Array): KeyObject | null {
   } catch {
     return null;
   }
+}
+
+/** A fresh X25519 key for this room session. Its public half is announced inside signed presence. */
+export function makeWhisperIdentity(seed: Uint8Array = randomBytes(32)): WhisperIdentity {
+  const privateKey = createPrivateKey({ key: Buffer.concat([X25519_PKCS8_PREFIX, Buffer.from(seed)]), format: 'der', type: 'pkcs8' });
+  const spki = createPublicKey(privateKey).export({ format: 'der', type: 'spki' });
+  return { publicKey: spki.subarray(X25519_SPKI_PREFIX.length), privateKey };
+}
+
+export function publicWhisperKeyOf(raw: Uint8Array): KeyObject | null {
+  if (raw.length !== 32) return null;
+  try {
+    return createPublicKey({ key: Buffer.concat([X25519_SPKI_PREFIX, Buffer.from(raw)]), format: 'der', type: 'spki' });
+  } catch {
+    return null;
+  }
+}
+
+export function whisperSecret(privateKey: KeyObject, publicKey: KeyObject): Buffer {
+  return diffieHellman({ privateKey, publicKey });
+}
+
+/** Pairwise topic; only the two X25519 holders can calculate the HMAC key. */
+export function whisperTopic(secret: Uint8Array, a: string, b: string): string {
+  const pair = [a, b].sort().join(':');
+  return createHmac('sha256', secret).update(`whisper:${pair}`).digest('hex').slice(0, 32);
+}
+
+export function whisperMessageKey(secret: Uint8Array): Buffer {
+  return Buffer.from(hkdfSync('sha256', secret, Buffer.alloc(0), 'lolping/whisper/msg/v1', 32));
 }
 
 /** The signature over an encoded message, in base64 (88 characters). */

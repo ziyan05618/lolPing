@@ -275,6 +275,7 @@ int runHooks(Output& out) {
         case Command::Kind::SetEnabled: apply(decision.setEnabled(c.flag)); break;
         case Command::Kind::Suspend: apply(decision.setSuspended(c.flag)); break;
         case Command::Kind::StaleWatch: apply(decision.setStaleWatch(c.flag)); break;
+        case Command::Kind::WhisperWatch: apply(decision.setWhisperWatch(c.flag)); break;
         case Command::Kind::Shutdown: PostQuitMessage(0); break;
         default: out.error("invalid command: " + *text); break;
       }

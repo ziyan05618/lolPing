@@ -60,7 +60,9 @@ class SignedRemote extends Remote {
     this.id = id;
   }
   override packet(m: Record<string, unknown>, key = KEYS.msgKey, signer: RoomIdentity = this.id): Buffer {
-    const extra = m.t === 'presence' ? { pk: this.id.pk.toString('base64') } : {};
+    const extra = m.t === 'presence'
+      ? { pk: this.id.pk.toString('base64'), xk: this.id.xk.toString('base64') }
+      : {};
     const body = encodeMessage({ peer: this.peer, seq: ++this.seq, ts: Date.now(), ...m, ...extra } as RoomMessage);
     if (m.t === 'chunk') return seal(key, body);
     const text = new TextDecoder().decode(body);
@@ -393,6 +395,11 @@ describe('incoming emotes', () => {
     alex.emote({ e: 'gg', d: 1, x: 0.5, y: 0.25 });
     expect(emotes).toEqual([{ displayId: 100, x: 960, y: 270, ref: 'gg', peer: alex.peer, tag: { name: 'Pa', color: 2, rgb: null } }]);
     expect(pings).toHaveLength(0);
+  });
+
+  it('drops a room-key emote carrying a private recipient field', () => {
+    alex.emote({ e: 'gg', to: '2222222222222222', d: 1, x: 0.5, y: 0.25 });
+    expect(emotes).toHaveLength(0);
   });
 
   it('passes a custom ref and an unknown slug on unchanged, for the overlay to resolve', () => {

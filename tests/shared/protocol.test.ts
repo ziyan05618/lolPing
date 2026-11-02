@@ -45,6 +45,7 @@ describe('parseHelperLine', () => {
   it('reads askWords and scroll', () => {
     expect(parseHelperLine('{"type":"askWords","x":10,"y":-20}')).toEqual({ type: 'askWords', x: 10, y: -20 });
     expect(parseHelperLine('{"type":"scroll","x":3,"y":4}')).toEqual({ type: 'scroll', x: 3, y: 4 });
+    expect(parseHelperLine('{"type":"whisperToggle"}')).toEqual({ type: 'whisperToggle' });
     for (const type of ['askWords', 'scroll']) {
       for (const rest of ['', ',"x":1', ',"y":2', ',"x":1.5,"y":2', ',"x":"1","y":2', ',"x":null,"y":2']) {
         expect(parseHelperLine(`{"type":"${type}"${rest}}`), `${type}${rest}`).toBeNull();
@@ -160,5 +161,9 @@ describe('commands', () => {
     const line = serializeCommand({ type: 'suspend', on: true });
     expect(line).toBe('{"type":"suspend","on":true}\n');
     expect(line.indexOf('\n')).toBe(line.length - 1);
+  });
+
+  it('serializes the conditional whisper watch command', () => {
+    expect(serializeCommand({ type: 'whisperWatch', on: true })).toBe('{"type":"whisperWatch","on":true}\n');
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  deriveRoomKeys, makeIdentity, MAX_PACKET, open, peerIdOf, publicKeyOf, seal, signBody, verifyBody,
+  deriveRoomKeys, makeIdentity, MAX_PACKET, open, peerIdOf, publicKeyOf, publicWhisperKeyOf, seal, signBody, verifyBody,
+  whisperMessageKey, whisperSecret, whisperTopic,
 } from '../../src/main/roomCrypto';
 import { PEER_RE } from '../../src/shared/roomProtocol';
 
@@ -87,5 +88,28 @@ describe('room signatures', () => {
     expect(verifyBody(key, body, Buffer.alloc(63).toString('base64'))).toBe(false);
     expect(verifyBody(key, body, '!!!')).toBe(false);
     expect(publicKeyOf(Buffer.alloc(31))).toBeNull();
+  });
+});
+
+describe('pairwise whisper keys', () => {
+  const seed = (v: number): Uint8Array => new Uint8Array(32).fill(v);
+
+  it('derives the same private topic for two members and a different topic for a third', () => {
+    const a = makeIdentity(seed(11));
+    const b = makeIdentity(seed(12));
+    const c = makeIdentity(seed(13));
+    const bPublic = publicWhisperKeyOf(b.xk);
+    const aPublic = publicWhisperKeyOf(a.xk);
+    const cPublic = publicWhisperKeyOf(c.xk);
+    if (!bPublic || !aPublic || !cPublic) throw new Error('invalid whisper public key');
+    const ab = whisperSecret(a.xkey, bPublic);
+    const ba = whisperSecret(b.xkey, aPublic);
+    const ac = whisperSecret(a.xkey, cPublic);
+    const topicAB = whisperTopic(ab, peerIdOf(a.pk), peerIdOf(b.pk));
+
+    expect(whisperTopic(ba, peerIdOf(b.pk), peerIdOf(a.pk))).toBe(topicAB);
+    expect(whisperTopic(ac, peerIdOf(a.pk), peerIdOf(c.pk))).not.toBe(topicAB);
+    const packet = seal(whisperMessageKey(ab), Buffer.from('private emote'));
+    expect(open(whisperMessageKey(ac), packet)).toBeNull();
   });
 });

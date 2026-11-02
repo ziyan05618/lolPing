@@ -1750,6 +1750,31 @@ static void test_scroll_is_reported_only_while_the_stale_watch_is_on() {
   CHECK(findEmit(d.onEvent(scrollAt(70, 80, 5000)), Emit::Kind::Scroll) != nullptr);
 }
 
+static void test_whisper_toggle_is_swallowed_only_while_watched() {
+  Decision d;
+  d.setConfig(Config{});
+  d.setWhisperWatch(true);
+  Result r = d.onEvent(InputEvent{EvKind::KeyDown, Btn::None, 0xC0, 0, 0, false, 100});
+  CHECK(r.swallow && findEmit(r, Emit::Kind::WhisperToggle) != nullptr);
+  r = d.onEvent(InputEvent{EvKind::KeyUp, Btn::None, 0xC0, 0, 0, false, 110});
+  CHECK(r.swallow);
+  d.setWhisperWatch(false);
+  r = d.onEvent(InputEvent{EvKind::KeyDown, Btn::None, 0xC0, 0, 0, false, 200});
+  CHECK(!r.swallow && r.emits.empty());
+
+  Decision shifted;
+  shifted.setWhisperWatch(true);
+  shifted.onEvent(kd(0xA0));  // Shift: the US keyboard's tilde character is Shift+OEM_3.
+  r = shifted.onEvent(kd(0xC0));
+  CHECK(r.swallow && findEmit(r, Emit::Kind::WhisperToggle) != nullptr);
+
+  Decision chord;
+  chord.setWhisperWatch(true);
+  chord.onEvent(kd(0xA2));  // Ctrl+OEM_3 belongs to the foreground app.
+  r = chord.onEvent(kd(0xC0));
+  CHECK(!r.swallow && r.emits.empty());
+}
+
 static void test_scroll_is_coalesced_to_one_per_100ms() {
   Decision d;
   d.setStaleWatch(true);
@@ -2047,6 +2072,7 @@ int main() {
   test_double_tap_yields_to_a_fullscreen_game_and_to_resets();
   test_scroll_is_reported_only_while_the_stale_watch_is_on();
   test_scroll_is_coalesced_to_one_per_100ms();
+  test_whisper_toggle_is_swallowed_only_while_watched();
   test_scroll_is_never_swallowed();
   test_stale_watch_keeps_a_wheel_that_is_open();
   test_wheel_released_after_its_key_was_let_go_reports_trigger_up_at_once();

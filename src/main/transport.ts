@@ -9,7 +9,7 @@ export type PeerKey = string;
 
 /**
  * Moves sealed room packets and nothing else: keys, validation and every decision stay in RoomManager.
- * Events: 'packet' (peer: PeerKey, packet: Uint8Array, type?: RoomEventType), 'peerGone' (peer: PeerKey), 'status' (TransportStatus),
+ * Events: 'packet' (peer: PeerKey, packet: Uint8Array, type?: RoomEventType, topic?: string), 'peerGone' (peer: PeerKey), 'status' (TransportStatus),
  * 'linkUp' (a new link came up: send presence now).
  */
 export interface Transport extends EventEmitter {
@@ -23,6 +23,9 @@ export interface Transport extends EventEmitter {
   sendTo(peer: PeerKey, packet: Uint8Array, type?: RoomEventType): void;
   /** LAN: UDP broadcast. Internet: every connected peer. */
   broadcast(packet: Uint8Array, type?: RoomEventType): void;
+  /** Internet transports may maintain additional pairwise topics. */
+  setWhisperTopics?(topics: readonly string[]): void;
+  broadcastOn?(topic: string, packet: Uint8Array, type?: RoomEventType): boolean;
   /** Resolves once a stop has finished flushing what was already sent (a bye). */
   whenClosed(): Promise<void>;
 }

@@ -205,6 +205,7 @@ void handleCommand(const std::string& text) {
     case Command::Kind::SetEnabled: apply(g_decision->setEnabled(c.flag)); break;
     case Command::Kind::Suspend: apply(g_decision->setSuspended(c.flag)); break;
     case Command::Kind::StaleWatch: apply(g_decision->setStaleWatch(c.flag)); break;
+    case Command::Kind::WhisperWatch: apply(g_decision->setWhisperWatch(c.flag)); break;
     case Command::Kind::Shutdown: CFRunLoopStop(CFRunLoopGetCurrent()); break;
     default: g_out->error("invalid command: " + text); break;
   }

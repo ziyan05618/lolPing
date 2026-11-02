@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { RoomKeys } from '../../../src/main/roomCrypto';
+import type { RoomEventType } from '../../../src/shared/roomProtocol';
 import type { PeerKey, Transport, TransportStatus } from '../../../src/main/transport';
 
 /** Records what RoomManager sends; tests push packets in with deliver(). */
@@ -43,8 +44,8 @@ export class FakeTransport extends EventEmitter implements Transport {
     this.sent.push({ to: '*', packet });
   }
 
-  deliver(peer: PeerKey, packet: Uint8Array): void {
-    this.emit('packet', peer, packet);
+  deliver(peer: PeerKey, packet: Uint8Array, type?: RoomEventType, topic?: string): void {
+    this.emit('packet', peer, packet, type, topic);
   }
 
   setStatus(s: TransportStatus): void {

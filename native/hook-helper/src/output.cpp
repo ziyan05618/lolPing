@@ -22,6 +22,7 @@ std::string formatEmit(const Emit& e) {
     case Emit::Kind::TriggerUp: return std::string("{\"type\":\"triggerUp\",\"wheel\":\"") + wheel + "\"}";
     case Emit::Kind::AskWords: return "{\"type\":\"askWords\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) + "}";
     case Emit::Kind::Scroll: return "{\"type\":\"scroll\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) + "}";
+    case Emit::Kind::WhisperToggle: return "{\"type\":\"whisperToggle\"}";
   }
   return "{}";
 }
@@ -45,8 +46,8 @@ void Output::line(std::string s) {
 
 void Output::emit(const Emit& e) { line(formatEmit(e)); }
 
-// Version 6: the config takes askDoubleTap; askWords and scroll events and the staleWatch command are new.
-void Output::ready() { line("{\"type\":\"ready\",\"version\":6}"); }
+// Version 7 adds the conditional whisper lock key and whisperWatch command.
+void Output::ready() { line("{\"type\":\"ready\",\"version\":7}"); }
 
 void Output::error(const std::string& message) { line("{\"type\":\"error\",\"message\":\"" + jsonEscape(message) + "\"}"); }
 

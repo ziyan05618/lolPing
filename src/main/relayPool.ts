@@ -6,6 +6,7 @@ import type { TransportStatus } from './transport';
 export interface RelayPoolOptions {
   urls: readonly string[];
   topic: string;
+  topics?: readonly string[];
   pubkey: string;
   socket?: SocketFactory;
   random?: () => number;
@@ -26,6 +27,7 @@ const BUDGET_PER_SECOND = 200;
 export class RelayPool extends EventEmitter {
   status: TransportStatus = 'off';
   private readonly conns: RelayConnection[];
+  private topics: string[];
   /** Relays that went live at least once, and relays that failed before ever going live. */
   private readonly everLive = new Set<RelayConnection>();
   private readonly failed = new Set<RelayConnection>();
@@ -38,9 +40,10 @@ export class RelayPool extends EventEmitter {
 
   constructor(opts: RelayPoolOptions) {
     super();
+    this.topics = [...new Set([opts.topic, ...(opts.topics ?? [])])];
     this.conns = opts.urls.map((url) => {
-      const c = new RelayConnection({ url, topic: opts.topic, pubkey: opts.pubkey, socket: opts.socket, random: opts.random });
-      c.on('event', (e: NostrEvent) => this.onEvent(e));
+      const c = new RelayConnection({ url, topic: opts.topic, topics: this.topics, pubkey: opts.pubkey, socket: opts.socket, random: opts.random });
+      c.on('event', (e: NostrEvent, topic: string) => this.onEvent(e, topic));
       c.on('echo', () => this.refresh());
       c.on('state', (s: RelayState) => {
         if ((s === 'down' || s === 'retired') && !this.everLive.has(c)) this.failed.add(c);
@@ -53,6 +56,11 @@ export class RelayPool extends EventEmitter {
       c.on('ok', (id: string, ok: boolean) => this.emit('ok', id, ok));
       return c;
     });
+  }
+
+  setTopics(topics: readonly string[]): void {
+    this.topics = [...new Set(topics)];
+    for (const c of this.conns) c.setTopics(this.topics);
   }
 
   start(): void {
@@ -96,7 +104,7 @@ export class RelayPool extends EventEmitter {
     for (const c of this.conns) c.reconnectNow(false);
   }
 
-  private onEvent(e: NostrEvent): void {
+  private onEvent(e: NostrEvent, topic: string): void {
     if (this.stopped || this.seen.has(e.id)) return;
     this.seen.add(e.id);
     this.ring.push(e.id);
@@ -107,7 +115,7 @@ export class RelayPool extends EventEmitter {
       this.windowCount = 0;
     }
     if (++this.windowCount > BUDGET_PER_SECOND) return;
-    this.emit('event', e);
+    this.emit('event', e, topic);
   }
 
   private refresh(): void {

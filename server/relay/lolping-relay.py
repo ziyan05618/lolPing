@@ -39,7 +39,8 @@ RELAY_PATH = os.environ.get("RELAY_PATH", "").strip("/")
 ROOM_EVENT_KIND = 24747
 MAX_FRAME = 64 * 1024          # a room packet is at most 1200 bytes; this is generous headroom
 MAX_CLIENTS = 32
-MAX_SUBS_PER_CLIENT = 8
+# One room subscription plus one pairwise whisper topic for every other member in a 16-person room.
+MAX_SUBS_PER_CLIENT = 64
 RATE_LIMIT = 40                # messages per second per connection
 RATE_WINDOW = 1.0
 CLIENT_IDLE_TIMEOUT = 180      # no traffic at all for this long: drop it

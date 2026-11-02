@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parkedBounds } from '../../src/main/overlayManager';
 import type { EmoteArt } from '../../src/shared/emotes';
-import { OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED } from '../../src/shared/ipc';
+import { OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, OVERLAY_WHISPER_SELECT } from '../../src/shared/ipc';
 import { DEFAULT_SETTINGS, overlaySettings } from '../../src/shared/settings';
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -185,6 +185,21 @@ describe('OverlayManager emote clicks', () => {
     expect(resolveArt).toHaveBeenCalledWith('okay', false);
     expect(shared).toHaveBeenCalledOnce();
     expect(shared).toHaveBeenCalledWith({ ref: 'okay', displayId: 2, x: 300, y: 400 });
+  });
+
+  it('resolves a private recipient from the main-process member list instead of the renderer payload', () => {
+    const emitted = vi.fn();
+    mgr.setWhisperMembers([{ peer: '1111111111111111', name: 'Ana' }, { peer: '2222222222222222', name: 'Ben' }]);
+    mgr.setSharing({ ping: () => true, emote: () => true });
+    mgr.on('sharedEmote', emitted);
+    h.handlers.get(OVERLAY_WHISPER_SELECT)!({ sender: h.windows[0].webContents }, 1);
+    h.handlers.get(OVERLAY_EMOTED)!(
+      { sender: h.windows[0].webContents },
+      { ref: 'gg', x: 10, y: 20, to: '3333333333333333' },
+    );
+    expect(emitted).toHaveBeenCalledExactlyOnceWith({
+      ref: 'gg', displayId: 1, x: 10, y: 20, to: '2222222222222222',
+    });
   });
 
   it('still drops the click ping for a ping click', () => {

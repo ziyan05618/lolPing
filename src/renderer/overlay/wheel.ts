@@ -27,6 +27,19 @@ export interface WheelItem {
   label?: string;
 }
 
+export interface WheelChoice {
+  key: string;
+  x: number;
+  y: number;
+  inner?: boolean;
+}
+
+function pickRingSlice(dx: number, dy: number, count: number): number {
+  const step = 360 / count;
+  const deg = ((Math.atan2(dy, dx) * 180) / Math.PI + 90 + step / 2 + 360) % 360;
+  return Math.floor(deg / step) % count;
+}
+
 /** Longer labels are cut so they stay inside the wheel's centre. */
 const CENTER_LABEL_MAX = 14;
 const fitLabel = (text: string): string => {
@@ -40,6 +53,8 @@ const fitLabel = (text: string): string => {
  */
 export class Wheel {
   private readonly wedges: SVGPathElement[] = [];
+  private readonly innerWedges: SVGPathElement[] = [];
+  private readonly innerLabels: SVGTextElement[] = [];
   private readonly icons: SVGImageElement[] = [];
   private hub: SVGImageElement | null = null;
   private centerTxt: SVGTextElement | null = null;
@@ -48,16 +63,19 @@ export class Wheel {
   private dimmed = new Set<string>();
   private items: readonly WheelItem[] = [];
   private hot = -1;
+  private innerHot = -1;
   private ox = 0;
   private oy = 0;
   private opened = false;
   private scale = 1;
+  private innerItems: readonly WheelItem[] = [];
 
   constructor(
     private readonly svg: SVGSVGElement,
     private readonly centerLabel: string,
     private readonly centerIcon: string,
     private readonly onHover: (slice: number) => void,
+    private readonly onInnerHover: (slice: number) => void = () => undefined,
   ) {
     this.build();
   }
@@ -72,6 +90,19 @@ export class Wheel {
     });
     this.setDimmed([...this.dimmed]);
     this.showCenterText();
+  }
+
+  setInnerItems(items: readonly WheelItem[]): void {
+    this.innerItems = items.slice(0, 15);
+    this.innerLabels.forEach((label, i) => {
+      const item = this.innerItems[i];
+      label.textContent = item?.label ?? '';
+      label.style.display = item ? '' : 'none';
+    });
+    this.innerWedges.forEach((wedge, i) => {
+      wedge.style.display = this.innerItems[i] ? '' : 'none';
+    });
+    this.setInnerHot(-1);
   }
 
   /** The centre's text while no labelled slice is hovered; null puts the wheel's own back. */
@@ -119,16 +150,28 @@ export class Wheel {
   }
 
   move(x: number, y: number): void {
-    if (this.opened) this.setHot(pickSlice(x - this.ox, y - this.oy, WHEEL.innerR * this.scale));
+    if (!this.opened) return;
+    const dx = x - this.ox;
+    const dy = y - this.oy;
+    if (this.innerItems.length && Math.hypot(dx, dy) >= 28 * this.scale && Math.hypot(dx, dy) < WHEEL.innerR * this.scale) {
+      this.setHot(-1);
+      this.setInnerHot(pickRingSlice(dx, dy, this.innerItems.length));
+    } else {
+      this.setInnerHot(-1);
+      this.setHot(pickSlice(dx, dy, WHEEL.innerR * this.scale));
+    }
   }
 
   /** Closes the wheel. Returns the chosen item's key at the wheel centre, or null when released in the dead zone. */
-  release(x: number, y: number): { key: string; x: number; y: number } | null {
+  release(x: number, y: number): WheelChoice | null {
     if (!this.opened) return null;
-    const slice = pickSlice(x - this.ox, y - this.oy, WHEEL.innerR * this.scale);
+    const dx = x - this.ox;
+    const dy = y - this.oy;
+    const inner = this.innerItems.length && Math.hypot(dx, dy) >= 28 * this.scale && Math.hypot(dx, dy) < WHEEL.innerR * this.scale;
+    const slice = inner ? pickRingSlice(dx, dy, this.innerItems.length) : pickSlice(dx, dy, WHEEL.innerR * this.scale);
     this.close();
-    const item = slice >= 0 ? this.items[slice] : undefined;
-    return item ? { key: item.key, x: this.ox, y: this.oy } : null;
+    const item = slice >= 0 ? (inner ? this.innerItems[slice] : this.items[slice]) : undefined;
+    return item ? { key: item.key, x: this.ox, y: this.oy, ...(inner ? { inner: true } : {}) } : null;
   }
 
   cancel(): void {
@@ -139,6 +182,8 @@ export class Wheel {
     this.opened = false;
     this.svg.classList.remove('open');
     this.setHot(-1);
+    this.setInnerHot(-1);
+    this.onInnerHover(-1);
   }
 
   private setHot(i: number): void {
@@ -156,9 +201,20 @@ export class Wheel {
     this.showCenterText();
   }
 
+  private setInnerHot(i: number): void {
+    if (i === this.innerHot) return;
+    if (this.innerHot >= 0) this.innerWedges[this.innerHot].setAttribute('fill-opacity', '0');
+    this.innerHot = i;
+    if (i >= 0) {
+      this.innerWedges[i].setAttribute('fill-opacity', '0.55');
+    }
+    if (this.opened) this.onInnerHover(i);
+    this.showCenterText();
+  }
+
   private showCenterText(): void {
     if (!this.centerTxt) return;
-    const label = this.hot >= 0 ? this.items[this.hot]?.label : undefined;
+    const label = this.innerHot >= 0 ? this.innerItems[this.innerHot]?.label : this.hot >= 0 ? this.items[this.hot]?.label : undefined;
     this.centerTxt.textContent = label ? fitLabel(label) : this.idleLabel ?? this.centerLabel;
   }
 
@@ -181,6 +237,15 @@ export class Wheel {
     slots.forEach((i) => {
       const mid = -90 + i * 45;
       if (i % 2 === 0) el('path', { d: sector(outerR, extR, mid - 22.5, mid + 22.5), fill: `url(#${id}-ext)` }, svg);
+    });
+
+    [...Array(15).keys()].forEach((i) => {
+      const step = 360 / 15;
+      const mid = -90 + i * step;
+      this.innerWedges.push(el('path', { d: sector(28, innerR - 2, mid - step / 2, mid + step / 2), fill: `url(#${id}-hot)`, 'fill-opacity': 0, class: 'innerWedge', display: 'none' }, svg));
+      const [x, y] = polar((28 + innerR - 2) / 2, mid);
+      const label = el('text', { x, y: y + 4, 'text-anchor': 'middle', class: 'innerTxt', display: 'none' }, svg);
+      this.innerLabels.push(label);
     });
     el('circle', { r: (innerR + outerR) / 2, fill: 'none', stroke: `url(#${id}-ring)`, 'stroke-width': outerR - innerR, opacity: 0.92 }, svg);
     slots.forEach((i) => {

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { parseRelayMessage, reqMessage, ROOM_EVENT_KIND, type NostrEvent } from './nostrEvent';
+import { closeMessage, parseRelayMessage, reqMessage, ROOM_EVENT_KIND, type NostrEvent } from './nostrEvent';
 
 /** connecting → live ⇄ cooling; down waits to reconnect; retired stays out for this room session. */
 export type RelayState = 'connecting' | 'live' | 'cooling' | 'down' | 'retired';
@@ -18,15 +18,16 @@ export type SocketFactory = (url: string) => SocketLike;
 
 export interface RelayConnectionOptions {
   url: string;
-  /** The room's relay topic: the only events we subscribe to. */
+  /** The room's relay topic plus any pairwise whisper topics. */
   topic: string;
+  topics?: readonly string[];
   /** Ours: events signed with it are our own coming back, which proves the relay delivers. */
   pubkey: string;
   socket?: SocketFactory;
   random?: () => number;
 }
 
-const SUB_ID = 'lolping';
+const ROOM_SUB_ID = 'lolping';
 /** The replay guard's window: a relay that wrongly stored older events can't send them back. */
 const SINCE_S = 600;
 const CONNECT_MS = 10_000;
@@ -66,12 +67,24 @@ export class RelayConnection extends EventEmitter {
   private windowCount = 0;
   private readonly socket: SocketFactory;
   private readonly random: () => number;
+  private topics: string[];
 
   constructor(private readonly opts: RelayConnectionOptions) {
     super();
     this.url = opts.url;
     this.socket = opts.socket ?? defaultSocket;
     this.random = opts.random ?? Math.random;
+    this.topics = [...new Set([opts.topic, ...(opts.topics ?? [])])];
+  }
+
+  setTopics(topics: readonly string[]): void {
+    const next = [...new Set([this.opts.topic, ...topics])];
+    const previous = this.topics;
+    this.topics = next;
+    if (this.state === 'live') {
+      for (const topic of previous) if (!next.includes(topic)) this.sock?.send(closeMessage(this.subId(topic)));
+      for (const topic of next) if (!previous.includes(topic)) this.subscribeTopic(topic);
+    }
   }
 
   get healthy(): boolean {
@@ -155,7 +168,19 @@ export class RelayConnection extends EventEmitter {
   }
 
   private subscribe(): void {
-    this.sock?.send(reqMessage(SUB_ID, this.opts.topic, Math.floor(Date.now() / 1000) - SINCE_S));
+    for (const topic of this.topics) this.subscribeTopic(topic);
+  }
+
+  private subscribeTopic(topic: string): void {
+    this.sock?.send(reqMessage(this.subId(topic), topic, Math.floor(Date.now() / 1000) - SINCE_S));
+  }
+
+  private subId(topic: string): string {
+    return topic === this.opts.topic ? ROOM_SUB_ID : `${ROOM_SUB_ID}-${topic}`;
+  }
+
+  private topicForSubId(id: string): string | null {
+    return this.topics.find((topic) => this.subId(topic) === id) ?? null;
   }
 
   private onMessage(data: unknown): void {
@@ -170,18 +195,20 @@ export class RelayConnection extends EventEmitter {
     if (!m) return;
     if (m.type === 'EVENT') {
       const e = m.event;
-      if (m.subId !== SUB_ID || e.kind !== ROOM_EVENT_KIND || !e.tags.some((t) => t[0] === 'x' && t[1] === this.opts.topic)) return;
+      const topic = this.topicForSubId(m.subId);
+      if (!topic || e.kind !== ROOM_EVENT_KIND || !e.tags.some((t) => t[0] === 'x' && t[1] === topic)) return;
       if (e.pubkey === this.opts.pubkey) this.onEcho();
-      else this.emit('event', e satisfies NostrEvent);
+      else this.emit('event', e satisfies NostrEvent, topic);
     } else if (m.type === 'OK') {
       this.emit('ok', m.eventId, m.ok, m.message);
       if (m.ok) return;
       if (m.message.startsWith('rate-limited:')) this.cool();
       else if (RETIRE_PREFIXES.some((p) => m.message.startsWith(p))) this.retire();
-    } else if (m.type === 'CLOSED' && m.subId === SUB_ID) {
+    } else if (m.type === 'CLOSED' && this.topicForSubId(m.subId) !== null) {
       if (this.closedOnce) return this.retire();
       this.closedOnce = true;
-      this.subscribe();
+      const topic = this.topicForSubId(m.subId);
+      if (topic) this.subscribeTopic(topic);
     }
   }
 

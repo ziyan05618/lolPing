@@ -6,10 +6,9 @@ import { canDoubleTap } from './teammate/settings';
 export type WheelKind = 'ping' | 'emote' | 'ask';
 
 /**
- * The helper's `ready` version this build expects. 5: the ask key, `"wheel":"ask"` and `triggerUp`.
- * 6 adds `askWords`, `scroll`, the `askDoubleTap` config field and the `staleWatch` command.
+ * The helper's `ready` version this build expects. 7 adds the conditional whisper lock key and watch command.
  */
-export const HELPER_VERSION = 6;
+export const HELPER_VERSION = 7;
 
 /**
  * Messages the hook helper writes to stdout, one JSON object per line.
@@ -28,6 +27,7 @@ export type HelperEvent =
   | { type: 'askWords'; x: number; y: number }
   /** A scroll while the stale watch is on; the helper sends at most one per 100 ms. */
   | { type: 'scroll'; x: number; y: number }
+  | { type: 'whisperToggle' }
   | { type: 'error'; message: string; code?: string }
   | { type: 'sim'; swallow: boolean; inject: string };
 
@@ -62,6 +62,8 @@ export function parseHelperLine(line: string): HelperEvent | null {
       return { type: 'textRequested' };
     case 'panel':
       return typeof o.show === 'boolean' ? { type: 'panel', show: o.show } : null;
+    case 'whisperToggle':
+      return { type: 'whisperToggle' };
     case 'triggerUp':
       return isWheel(o.wheel) ? { type: 'triggerUp', wheel: o.wheel } : null;
     case 'askWords':
@@ -116,6 +118,7 @@ export type HelperCommand =
   | { type: 'suspend'; on: boolean }
   /** Report scrolls. Its own command, not a config field: a config cancels a gesture the user may be in. */
   | { type: 'staleWatch'; on: boolean }
+  | { type: 'whisperWatch'; on: boolean }
   | { type: 'shutdown' };
 
 /**

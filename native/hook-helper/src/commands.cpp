@@ -101,6 +101,9 @@ Command parseCommand(const std::string& line, const Config& current) {
   } else if (type == "staleWatch") {
     c.kind = Command::Kind::StaleWatch;
     c.flag = getBool(m, "on", false);
+  } else if (type == "whisperWatch") {
+    c.kind = Command::Kind::WhisperWatch;
+    c.flag = getBool(m, "on", false);
   } else if (type == "shutdown") {
     c.kind = Command::Kind::Shutdown;
   } else if (type == "sim") {

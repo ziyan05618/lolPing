@@ -20,6 +20,8 @@ const api: OverlayApi = {
   reportEmote(ref, x, y) {
     emit('emote:spawn', { owner: 'self', art: isBundledEmote(ref) ? { kind: 'bundled', slug: ref } : { kind: 'placeholder' }, x, y });
   },
+  reportWhisperHover() {},
+  selectWhisper() {},
   reportIdle() {
     // the page is the overlay, so there is no window to hide
   },

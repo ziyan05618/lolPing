@@ -257,6 +257,7 @@ function start(): void {
         return true;
       }),
   );
+  overlays.setWhisperCopy(text().whisper);
   overlays.start();
   const bridge = new InputBridge({ command: helperExePath() });
 
@@ -480,6 +481,7 @@ function start(): void {
     bridge.send(configCommand(effective(settings), enabled, live));
   };
   room.on('state', () => {
+    overlays.setWhisperMembers(room.whisperMembers());
     const next = liveKeys(settings, { active: room.state().phase === 'active' }, enabled);
     if (next.text !== live.text || next.panel !== live.panel) sendConfig();
   });
@@ -497,9 +499,18 @@ function start(): void {
     emote: (p: SharedEmote) => {
       const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
       const fx = settings.customEmotes.find((c) => c.id === p.ref)?.fx;
-      return shared !== null && room.sendEmote(p.ref, shared, fx);
+      return shared !== null && room.sendEmote(p.ref, shared, fx, p.to);
     },
   });
+  let whisperWatch = false;
+  const setWhisperWatch = (on: boolean): void => {
+    if (whisperWatch === on) return;
+    whisperWatch = on;
+    bridge.send({ type: 'whisperWatch', on });
+  };
+  overlays.on('whisperHover', (on: boolean) => setWhisperWatch(on));
+  overlays.on('whisperGone', () => overlays.toast(text().whisper.targetLeft, ''));
+  overlays.setWhisperMembers(room.whisperMembers());
   room.on('remoteEmote', (p) => {
     if (featureOn(settings, 'emotes')) overlays.spawnRemoteEmote(p);
   });
@@ -750,7 +761,9 @@ function start(): void {
       if (capturing || textOpen || wordsOpen) syncSuspended();
       panels.hideRoster(); // a restarted helper lost the panel key's up, so a shown roster would stay up
       mate?.stale.helperReady();
+      bridge.send({ type: 'whisperWatch', on: whisperWatch });
     } else if (ev.type === 'scroll') mate?.stale.scroll({ x: ev.x, y: ev.y });
+    else if (ev.type === 'whisperToggle') overlays.toggleWhisperLock();
     else if (ev.type === 'error') console.warn('[helper]', ev.code ?? '', ev.message);
     else if (ev.type === 'triggerUp') {
       // Only the key that asks sends the spots held so far; the emote key's up, or the ping key's outside it, doesn't.
@@ -1126,6 +1139,7 @@ function start(): void {
       mate.history.prune({ keepDays: h.keepDays, maxThreads: h.maxThreads }).catch(() => undefined);
     }
     overlays.updateSettings(overlaySettings(effective(s), resolveLang(s.language, app.getLocale())));
+    overlays.setWhisperCopy(text().whisper);
     settingsWindow()?.webContents.send(SETTINGS_CH.changed, s);
     if (s.language !== previous.language) tray.setText(text());
     if (

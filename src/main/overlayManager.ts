@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { isEmoteRefShape, type EmoteArt, type EmoteRef } from '../shared/emotes';
 import {
   OVERLAY_ASSETS, OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, type OverlayChannel, type OverlayEvents, type PingTag,
+  OVERLAY_WHISPER_HOVER, OVERLAY_WHISPER_SELECT,
 } from '../shared/ipc';
 import { WHEEL, pickSlice } from '../shared/geometry';
 import { isPingId, type PingId } from '../shared/pings';
@@ -29,6 +30,7 @@ export interface SharedEmote {
   displayId: number;
   x: number;
   y: number;
+  to?: string;
 }
 
 /** An ask-wheel release on a slice whose intent is on: the wheel centre, in overlay CSS px and physical px. */
@@ -108,6 +110,11 @@ export class OverlayManager extends EventEmitter {
   private mateTicket: string | null = null;
   private captureExcluded = false;
   private sharing: { ping(p: SharedPing): boolean; emote(p: SharedEmote): boolean } | null = null;
+  private whisperMembers: { peer: string; name: string }[] = [];
+  private whisperTarget: string | null = null;
+  private whisperHover: string | null = null;
+  private whisperLocked = false;
+  private whisperCopy: { prefix(name: string): string; locked(name: string): string } | null = null;
   /** Overlays whose page last said it has nothing on it, parked off their displays (Windows only). */
   private readonly idleWindows = new WeakSet<BrowserWindow>();
 
@@ -134,6 +141,21 @@ export class OverlayManager extends EventEmitter {
       const displayId = this.displayOf(event.sender);
       if (displayId === undefined) return;
       this.placeOwnEmote(p.ref, { displayId, x: p.x, y: p.y });
+    });
+    ipcMain.on(OVERLAY_WHISPER_HOVER, (event, raw: unknown) => {
+      if (this.displayOf(event.sender) === undefined) return;
+      const index = Number.isInteger(raw) ? raw as number : -1;
+      this.whisperHover = index >= 0 && index < this.whisperMembers.length ? this.whisperMembers[index].peer : null;
+      this.emit('whisperHover', this.whisperHover !== null);
+    });
+    ipcMain.on(OVERLAY_WHISPER_SELECT, (event, raw: unknown) => {
+      if (this.displayOf(event.sender) === undefined) return;
+      if (!Number.isInteger(raw)) return;
+      const member = this.whisperMembers[raw as number];
+      if (!member) return;
+      this.whisperTarget = member.peer;
+      this.whisperLocked = false;
+      this.broadcastWhisperState();
     });
     ipcMain.on(OVERLAY_IDLE, (event, idle: unknown) => {
       // Screenshot tools on Windows take a shown overlay for a window over the whole display (#127): park an empty one.
@@ -388,8 +410,52 @@ export class OverlayManager extends EventEmitter {
     this.sharing = sharing;
   }
 
+  setWhisperMembers(members: readonly { peer: string; name: string; self?: boolean }[]): void {
+    const next = members.filter((m) => !m.self).map(({ peer, name }) => ({ peer, name })).slice(0, 15);
+    this.whisperMembers = next;
+    if (this.whisperTarget && !next.some((m) => m.peer === this.whisperTarget)) {
+      this.whisperTarget = null;
+      this.whisperLocked = false;
+      this.emit('whisperGone');
+    }
+    if (this.whisperHover && !next.some((m) => m.peer === this.whisperHover)) {
+      this.whisperHover = null;
+      this.emit('whisperHover', false);
+    }
+    this.broadcastWhisperState();
+  }
+
+  setWhisperCopy(copy: { prefix(name: string): string; locked(name: string): string }): void {
+    this.whisperCopy = copy;
+    this.broadcastWhisperState();
+  }
+
+  toggleWhisperLock(): void {
+    const target = this.whisperHover;
+    if (!target || !this.whisperMembers.some((m) => m.peer === target)) return;
+    if (this.whisperLocked && this.whisperTarget === target) {
+      this.whisperTarget = null;
+      this.whisperLocked = false;
+    } else {
+      this.whisperTarget = target;
+      this.whisperLocked = true;
+    }
+    this.broadcastWhisperState();
+  }
+
+  private broadcastWhisperState(): void {
+    const name = this.whisperMembers.find((m) => m.peer === this.whisperTarget)?.name;
+    const label = name && this.whisperCopy
+      ? (this.whisperLocked ? this.whisperCopy.locked(name) : this.whisperCopy.prefix(name))
+      : null;
+    for (const id of this.windows.keys()) this.send(id, 'whisper:state', {
+      members: this.whisperMembers, target: this.whisperTarget, locked: this.whisperLocked, label,
+    });
+  }
+
   private placeOwnEmote(ref: EmoteRef, p: LocalPoint): void {
-    const shared: SharedEmote = { ref, displayId: p.displayId, x: p.x, y: p.y };
+    const target = this.whisperTarget ?? undefined;
+    const shared: SharedEmote = { ref, displayId: p.displayId, x: p.x, y: p.y, ...(target ? { to: target } : {}) };
     if (this.sharing && !this.sharing.emote(shared)) return;
     this.send(p.displayId, 'emote:spawn', { owner: 'self', art: this.resolveArt(ref, false), x: p.x, y: p.y });
     this.clearElsewhere(p.displayId, 'self');

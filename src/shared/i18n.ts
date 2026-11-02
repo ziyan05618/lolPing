@@ -623,6 +623,11 @@ const en = {
     ping: 'Sending too fast, retry in {n}s',
     text: 'Text cooldown {n}s',
   },
+  whisper: {
+    prefix: (name: string) => `Private · ${name}`,
+    locked: (name: string) => `🔒 ${name}`,
+    targetLeft: 'Private emote target left the room.',
+  },
   roomInvalid: 'That isn’t a room code.',
   roomMistyped: 'This code looks mistyped.',
   roomJoinFailed: 'Couldn’t join the room. Try again.',
@@ -1062,6 +1067,11 @@ const zh: Strings = {
     emote: '表情冷却 {n}s',
     ping: '发送过快，{n}s 后重试',
     text: '文字冷却 {n}s',
+  },
+  whisper: {
+    prefix: (name) => `私聊 · ${name}`,
+    locked: (name) => `🔒 ${name}`,
+    targetLeft: '私聊对象已离开房间。',
   },
   roomInvalid: '这不是房间码。',
   roomMistyped: '房间码好像输错了。',

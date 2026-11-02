@@ -31,6 +31,7 @@ export class RelayTransport extends EventEmitter implements Transport {
   private pool: RelayPool | null = null;
   private pair: KeyPair | null = null;
   private topic = '';
+  private whisperTopics = new Set<string>();
   /** The id of the last event that reached a relay and isn't acknowledged yet: the bye a stop waits for. */
   private lastSent: string | null = null;
   private closing: Promise<void> = Promise.resolve();
@@ -44,14 +45,14 @@ export class RelayTransport extends EventEmitter implements Transport {
   start(keys: RoomKeys): void {
     if (this.pool) return;
     const pair = makeKeyPair();
-    const pool = new RelayPool({ urls: this.urls, topic: keys.relayTopic, pubkey: pair.pubkey, socket: this.opts.socket, random: this.opts.random });
+    const pool = new RelayPool({ urls: this.urls, topic: keys.relayTopic, topics: [...this.whisperTopics], pubkey: pair.pubkey, socket: this.opts.socket, random: this.opts.random });
     this.pool = pool;
     this.pair = pair;
     this.topic = keys.relayTopic;
     this.lastSent = null;
     // A stopped pool can still be draining its bye: nothing it hears belongs to the session after it.
-    pool.on('event', (e: NostrEvent) => {
-      if (this.pool === pool) this.onEvent(e);
+    pool.on('event', (e: NostrEvent, topic: string) => {
+      if (this.pool === pool) this.onEvent(e, topic);
     });
     pool.on('status', (s: TransportStatus) => {
       if (this.pool === pool) this.setStatus(s);
@@ -63,6 +64,11 @@ export class RelayTransport extends EventEmitter implements Transport {
       if (this.pool === pool && id === this.lastSent) this.lastSent = null; // nothing left to wait for on stop
     });
     pool.start();
+  }
+
+  setWhisperTopics(topics: readonly string[]): void {
+    this.whisperTopics = new Set(topics);
+    this.pool?.setTopics([this.topic, ...this.whisperTopics]);
   }
 
   /** Sends nothing new; lets the bye already sent reach the relays, then closes. */
@@ -106,10 +112,16 @@ export class RelayTransport extends EventEmitter implements Transport {
   }
 
   broadcast(packet: Uint8Array, type?: RoomEventType): void {
-    if (!this.pool || !this.pair) return;
+    this.broadcastOn(this.topic, packet, type);
+  }
+
+  broadcastOn(topic: string, packet: Uint8Array, type?: RoomEventType): boolean {
+    if (!this.pool || !this.pair) return false;
+    if (topic !== this.topic && !this.whisperTopics.has(topic)) return false;
     const content = Buffer.from(packet.buffer, packet.byteOffset, packet.length).toString('base64');
-    const e = signEvent(this.pair, ROOM_EVENT_KIND, roomEventTags(this.topic, type), content, Math.floor(Date.now() / 1000));
+    const e = signEvent(this.pair, ROOM_EVENT_KIND, roomEventTags(topic, type), content, Math.floor(Date.now() / 1000));
     this.lastSent = this.pool.publish(e) > 0 ? e.id : null;
+    return this.lastSent !== null;
   }
 
   /** The Retry button. */
@@ -122,9 +134,9 @@ export class RelayTransport extends EventEmitter implements Transport {
     this.pool?.wake();
   }
 
-  private onEvent(e: NostrEvent): void {
+  private onEvent(e: NostrEvent, topic: string): void {
     if (e.content.length > MAX_CONTENT || !BASE64.test(e.content)) return;
-    this.emit('packet', `net:${e.pubkey}`, Buffer.from(e.content, 'base64'), taggedRoomEventType(e.tags));
+    this.emit('packet', `net:${e.pubkey}`, Buffer.from(e.content, 'base64'), taggedRoomEventType(e.tags), topic);
   }
 
   private setStatus(s: TransportStatus): void {

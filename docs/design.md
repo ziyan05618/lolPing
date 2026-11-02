@@ -354,7 +354,7 @@ The Linux port is an X11 backend. Setup, limits and testing are in [linux.md](li
 - **RoomManager (`src/main/roomManager.ts`):** members, path choice (LAN while alive, else internet), the incoming rate limit (per member, user setting 1–20/s or unlimited), mute (room and per person), timeouts (LAN path alive 6 s and member dropped after 15 s; internet path alive 25 s and member dropped after 30 s, and a member dropped that way keeps its peer ID, so the same ID coming back returns quietly instead of joining again, and only its first timeout says "disconnected"), "room is full" 3 s after the relays answer (at most 15 s). It only talks to the network through the `Transport` interface (`src/main/transport.ts`); a `shared` transport gets each packet once, pings over it are capped at 5/s (bursts of 10), and presence at once a second.
 - **LAN transport (`src/main/lanTransport.ts`):** one UDP socket on port 47474. Presence is broadcast every 2 s to 255.255.255.255 and each interface's directed broadcast; pings go unicast to the address a member's packets come from. Before decryption, a flood guard allows 100 packets/s per source IP and 800/s in total, and tracks at most 1024 addresses. The socket is re-bound after sleep.
 - **Mapping:** displays are numbered #1 = primary, then left→right, top→bottom (`src/main/displayNumbers.ts`). A ping lands on the receiver's display with the same number, or #1, at the same fraction of its size. `resolveTarget` is the hook a later share-window mode replaces.
-- **Overlay:** the wheel reports a proposed ping or emote to main (`overlay:pinged`, `overlay:emoted`). Main checks the room quota, publishes, and sends the accepted placement back to the overlay. Click placements and local text take the same check before animation, sound or history. Rejected placements leave the previous kept ping or emote in place. Settings previews and teammate replies have their own paths. Remote pings carry a name tag. Safety ceiling: 60 pings on screen, 8 overlapping sounds.
+- **Overlay:** the wheel reports a proposed ping or emote to main (`overlay:pinged`, `overlay:emoted`). Main checks the room quota, publishes, and sends the accepted placement back to the overlay. Click placements and local text take the same check before animation, sound or history. A locally rejected message shows a short, countdown cooldown; an incoming rejection is silent. Rejected placements leave the previous kept ping or emote in place. Settings previews and teammate replies have their own paths. Remote pings carry a name tag. Safety ceiling: 60 pings on screen, 8 overlapping sounds.
 - **Relay transport (v0.4.0, `src/main/relayTransport.ts`):** each sealed packet becomes one ephemeral Nostr event (kind 24747, tag `x` = a topic derived from the code, base64 content), signed with a key made fresh on every join (`src/main/nostrEvent.ts`), and published to every live relay in `src/main/relays.ts`. A build can include the private relay along with all six public relays; members never see each other's IP over it.
   - `RelayPool` drops copies by event id and caps intake at 200 events/s. `RelayConnection` judges each relay by our own events coming back: no echo for 25 s means down and a reconnect with backoff (2 s → 60 s); `rate-limited` cools it for 30 s; `blocked`/`restricted`/`auth-required`/`pow`/`invalid`, a message over 64 KB or over 400 messages/s retire it for the session.
   - Status is `ok` while any relay echoes, `unavailable` after 15 s without one (the Room page then offers Retry). "Allow internet connections" off means no relay is contacted; turning it off mid-room sends no bye.
@@ -364,19 +364,19 @@ The Linux port is an X11 backend. Setup, limits and testing are in [linux.md](li
 
 The policy service at `https://pet-api.zyyun618.com/policy/` holds ownership and quotas; it does not deliver or
 decrypt messages. nginx strips this prefix: `POST claim`, `POST policy` and `GET policy/<topic>` reach the
-loopback admin service's `/claim`, `/policy` and `/policy/<topic>`. Only these paths are public, with a request
+loopback admin service's `/claim`, `/policy`, `/heartbeat`, `/leave` and `/policy/<topic>`. Only these paths are public, with a request
 rate limit. Admin APIs and the three admin themes keep their existing authentication.
 
-Creating a room saves a random 16-byte owner token in `ownerTokens[relayTopic]` before attempting its claim.
-Claims are atomic and idempotent. A rejected claim removes this machine's candidate token. A failed request
-keeps it for a retry. Joining an existing room claims only with a token already saved here; possessing the code
-alone does not grant editing rights. Leaving keeps tokens, and only a server-confirmed owner gets editable quota
-fields. The authenticated admin `POST /api/clear-claim` accepts a dashboard room label and removes its claim and
-policy. Lost tokens otherwise leave the existing claim locked. Records expire after 24 hours without activity;
-policy reads and private-relay subscriptions refresh `last_seen`.
+The policy service tracks a random, stable per-installation `memberToken` and a per-room member row. A room
+member sends a heartbeat every 15 seconds. If the owner's heartbeat is missing for 45 seconds, the service
+transfers ownership to the active member with the earliest `joined_at`; leaving sends a release immediately.
+Only the current owner can edit quotas, and its Settings fields become read-only or editable as heartbeat responses
+change. A disconnected computer loses ownership after the grace period, so returning later as a normal member is
+expected. The authenticated admin `POST /api/clear-claim` accepts a dashboard room label and removes the claim and
+policy. Member and policy records expire after 24 hours without activity.
 
 `RoomManager` starts transports without waiting for HTTP. It fetches quotas on entry and every 10 seconds while
-internet connections are allowed. Reads and writes time out after 5 seconds. Failures use built-in quotas:
+internet connections are allowed; member heartbeats are sent every 15 seconds. Reads and writes time out after 5 seconds. Failures use built-in quotas:
 20 emotes per minute, 5 pings per second and 10 text lines per minute, per sender. With internet off there are no
 policy requests. Limits are integers from 0 to 600; 0 skips that class. A save takes effect here immediately and
 on other clients at their next refresh. A late response from a previous room or before a save cannot replace
@@ -391,6 +391,20 @@ The sender applies the same check before publishing and before local display. Ex
 relay pacing still apply. Updated clients enforce policy cooperatively; older apps keep their existing local
 behavior and cannot be forced to hide their own placements by a relay.
 
+### Private emotes
+
+The emote wheel's inner ring lists members with a signed presence that proves an X25519 public key. Main resolves a
+selected roster index against its current authenticated membership list; renderer IPC never supplies a recipient ID.
+The two members derive an ephemeral pairwise secret for this room session, then use it to derive both an AES message
+key and an opaque relay topic. The message is encrypted with that pairwise key and published only on that topic.
+Both participants subscribe; other room members do not. A room-topic emote carrying `to` is rejected. Private sends
+use the sender's normal emote quota and never fall back to the room topic. Older clients do not announce an X25519
+key and are not offered as whisper targets.
+
+Each joined room can have at most 15 pairwise subscriptions per client, alongside its room subscription. The relay
+subscription cap is 64. The inner ring's hover is reported to main as a roster index; the `~` key is captured only
+while a valid member is hovered, and that lock is kept in memory only for the room session.
+
 ### Room privacy
 
 Message contents, names and emote images remain encrypted. User messages now carry a cleartext Nostr `t` tag:
@@ -399,10 +413,14 @@ no type tag. This lets every relay learn those message classes in addition to to
 throwaway pubkeys and client IPs. Older relay events without a tag count as pings. Unknown fields remain safe
 for old clients, so `PROTOCOL_VERSION` stays 1.
 
-The policy host receives the anonymous topic and quotas; owner claims and writes also send the local owner
+The policy host receives the anonymous topic and quotas; member heartbeats and owner writes also send the local member
 token over HTTPS. It can see request IPs, but public JSON responses contain neither tokens nor IPs. No room code,
 message content, name or room signing key is sent to the policy service. The two READMEs and Room settings
 describe these network and metadata changes.
+
+Private emotes are encrypted with a pairwise key and use a pairwise-derived topic, never the shared room topic.
+Relays still see the event type and opaque topic. Other room members do not subscribe to that topic, and an old
+client without the new signed key announcement is not eligible for private emotes.
 
 ## 13. Emotes (v0.5.0)
 

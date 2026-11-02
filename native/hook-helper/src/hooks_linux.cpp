@@ -256,6 +256,7 @@ class Hooks {
       case Command::Kind::SetEnabled: apply(decision.setEnabled(c.flag)); configureGrabs(); break;
       case Command::Kind::Suspend: suspended = c.flag; apply(decision.setSuspended(c.flag)); configureGrabs(); break;
       case Command::Kind::StaleWatch: apply(decision.setStaleWatch(c.flag)); break;
+      case Command::Kind::WhisperWatch: apply(decision.setWhisperWatch(c.flag)); break;
       case Command::Kind::Shutdown: quit = true; break;
       default: out.error("invalid command: " + line); break;
     }
