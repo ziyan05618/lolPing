@@ -108,7 +108,9 @@ export class Wheel {
     this.innerLabels.forEach((label, i) => {
       const item = this.innerItems[i];
       label.textContent = item ? fitInnerLabel(item.label ?? '') : '';
-      label.style.display = item ? '' : 'none';
+      // display was set as an attribute when the element was built; clearing style.display would leave it hidden.
+      if (item) label.removeAttribute('display');
+      else label.setAttribute('display', 'none');
       if (item) {
         const mid = -90 + i * step;
         const [x, y] = polar((INNER_RING_START_R + WHEEL.innerR - 2) / 2, mid);
@@ -118,7 +120,8 @@ export class Wheel {
     });
     this.innerWedges.forEach((wedge, i) => {
       const item = this.innerItems[i];
-      wedge.style.display = item ? '' : 'none';
+      if (item) wedge.removeAttribute('display');
+      else wedge.setAttribute('display', 'none');
       if (item) {
         const mid = -90 + i * step;
         wedge.setAttribute('fill-opacity', String(INNER_WEDGE_IDLE));
