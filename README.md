@@ -171,7 +171,7 @@ Each ping asks for something. You can rename each one, change what it asks for, 
 - Exclusive-fullscreen games draw above the overlay.
 - Sharing a single window doesn't include the pings. Share your entire screen instead.
 - While you are in a room, a held Tab shows the room panel and doesn't reach other apps, and Alt + T opens the text box instead of reaching the app underneath. Change these keys, or turn the features off, in Settings → Room and Settings → Features.
-- While lolPing is on, Ctrl + drag opens the emote wheel instead of copying files or text. Pick another emote key, or turn it off, in Settings → Emotes.
+- While lolPing is on, Ctrl + drag opens the emote wheel and conflicts with copying files in File Explorer. Pick another emote key (Mouse 4 or 5 avoids this), or turn it off, in Settings → Emotes.
 - The AI teammate isn't available on Linux yet. It can't paste into windows running as administrator, and it can't fill form fields that an app hides from accessibility tools.
 - On a Mac, the wheel can't open while a secure screen is showing, such as the login window or a password prompt, and Accessibility has to be allowed again after each update.
 

@@ -197,6 +197,7 @@ export function EmoteSection({ settings: s, update, lengthUnit }: { settings: Se
         description={(
           <>
             {keyOff ? t.emoteKeyOffDesc : t.emoteKeyDesc}
+            {api.platform === 'win' && s.emoteTrigger === 'ctrl' ? <span className="desc">{t.emoteKeyCtrlWarning}</span> : null}
             {custom ? <span className="desc">{t.customKeyNote}</span> : null}
           </>
         )}>

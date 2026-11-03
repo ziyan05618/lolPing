@@ -75,9 +75,17 @@ describe('SettingsStore', () => {
     expect(store.emoteKeyClashed).toBe(true);
   });
 
-  it('gives an upgrading file the default emote key without flagging a clash', () => {
+  it('gives an upgrading file the Ctrl emote key when its ping key is Alt', () => {
     const dir = tempDir();
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ trigger: 'ctrl' })); // a 0.4.0 file: no emote keys
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ trigger: 'alt' })); // a 0.4.0 file: no emote keys
+    const store = new SettingsStore(dir);
+    expect(store.load().emoteTrigger).toBe('ctrl');
+    expect(store.emoteKeyClashed).toBe(false);
+  });
+
+  it('steps an upgrading file with a Ctrl ping key aside to the mouse button', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ trigger: 'ctrl' })); // no stored emote key
     const store = new SettingsStore(dir);
     expect(store.load().emoteTrigger).toBe('mouse5');
     expect(store.emoteKeyClashed).toBe(false);
@@ -106,7 +114,7 @@ describe('SettingsStore', () => {
     writeFileSync(join(dir, 'settings.json'), JSON.stringify({ version: 1, volume: 30 }));
     new SettingsStore(dir, 10).load();
     await sleep(80);
-    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toMatchObject({ emoteTrigger: 'mouse5', emoteSizePx: 150, customEmotes: [] });
+    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toMatchObject({ emoteTrigger: 'ctrl', emoteSizePx: 150, customEmotes: [] });
   });
 
   it('emits change with the normalized value', () => {

@@ -141,7 +141,7 @@ export const DEFAULT_SETTINGS: Settings = {
   memberToken: '',
   ownerTokens: {},
   roomMuted: false,
-  emoteTrigger: 'mouse5',
+  emoteTrigger: 'ctrl',
   emoteClick: false,
   emoteWheel: [...DEFAULT_EMOTE_WHEEL],
   clickEmoteId: DEFAULT_CLICK_EMOTE,
@@ -192,7 +192,7 @@ function triggerKey(raw: unknown, platform: Platform, fallback: TriggerKey): Tri
 const trigger = (raw: unknown, platform: Platform): TriggerKey => triggerKey(raw, platform, DEFAULT_SETTINGS.trigger);
 
 /** The emote key as stored, before the clash rules: 'off', or a trigger key with Ctrl as the fallback. */
-const emoteKey = (raw: unknown, platform: Platform): EmoteTriggerKey => (raw === 'off' ? 'off' : triggerKey(raw, platform, 'mouse5'));
+const emoteKey = (raw: unknown, platform: Platform): EmoteTriggerKey => (raw === 'off' ? 'off' : triggerKey(raw, platform, 'ctrl'));
 
 /** The Caps Lock key's code: the named 'capslock' trigger and a custom { vk: 0x14 } are one physical key. */
 const CAPS_LOCK_VK = 0x14;
@@ -352,7 +352,14 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     ? { ...(hotkeysEqual(toggleHotkey, DEFAULT_SETTINGS.textHotkey) ? TEXT_HOTKEY_FALLBACK : DEFAULT_SETTINGS.textHotkey) }
     : requestedTextHotkey;
   const emote = emoteKey(r.emoteTrigger, platform);
-  const emoteVk = triggerVk(triggersClash(pingTrigger, emote, toggleHotkey) ? 'off' : emote);
+  // A file that never stored an emote key never chose to turn the wheel off, so if the default collides with the ping
+  // key, step aside to the mouse button instead. A key the user picked still gets switched off, as it always has.
+  const emoteFinal: EmoteTriggerKey = !triggersClash(pingTrigger, emote, toggleHotkey)
+    ? emote
+    : r.emoteTrigger === undefined && !triggersClash(pingTrigger, 'mouse5', toggleHotkey)
+      ? 'mouse5'
+      : 'off';
+  const emoteVk = triggerVk(emoteFinal);
   const custom = customEmotes(r.customEmotes);
   return {
     version: 1,
@@ -386,7 +393,7 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     memberToken: memberToken(r.memberToken),
     ownerTokens: ownerTokens(r.ownerTokens),
     roomMuted: bool(r.roomMuted, 'roomMuted'),
-    emoteTrigger: triggersClash(pingTrigger, emote, toggleHotkey) ? 'off' : emote,
+    emoteTrigger: emoteFinal,
     emoteClick: bool(r.emoteClick, 'emoteClick'),
     emoteWheel: normalizeEmoteWheel(r.emoteWheel, custom),
     clickEmoteId: normalizeClickEmote(r.clickEmoteId, custom),

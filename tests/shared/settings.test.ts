@@ -273,7 +273,7 @@ describe('emote settings', () => {
   it('emote defaults', () => {
     const s = normalizeSettings(undefined);
     expect(s).toMatchObject({
-      emoteTrigger: 'mouse5', emoteClick: false, emoteSizePx: 150, emoteSound: true, customEmotes: [],
+      emoteTrigger: 'ctrl', emoteClick: false, emoteSizePx: 150, emoteSound: true, customEmotes: [],
       emoteWheel: [...DEFAULT_EMOTE_WHEEL], clickEmoteId: DEFAULT_CLICK_EMOTE,
     });
     expect(DEFAULT_SETTINGS.trigger).not.toBe(DEFAULT_SETTINGS.emoteTrigger);
@@ -285,8 +285,8 @@ describe('emote settings', () => {
     expect(s.customEmotes).not.toBe(DEFAULT_SETTINGS.customEmotes);
   });
 
-  it('emote key clashing with the ping trigger turns off', () => {
-    expect(normalizeSettings({ trigger: 'mouse5' }).emoteTrigger).toBe('off');
+  it('emote key clashing with the ping trigger turns off, unless the file never chose one', () => {
+    expect(normalizeSettings({ trigger: 'ctrl' }).emoteTrigger).toBe('mouse5');
     expect(normalizeSettings({ trigger: 'ctrl', emoteTrigger: 'ctrl' }).emoteTrigger).toBe('off');
     expect(normalizeSettings({ trigger: { vk: 84 }, emoteTrigger: { vk: 84 } }).emoteTrigger).toBe('off');
     expect(normalizeSettings({ trigger: { vk: 84 }, emoteTrigger: { vk: 85 } }).emoteTrigger).toEqual({ vk: 85 });
@@ -301,7 +301,7 @@ describe('emote settings', () => {
 
   it('replaces an unusable emote key with the default one', () => {
     for (const emoteTrigger of ['meta', 7, null, { vk: 300 }, { vk: 'x' }]) {
-      expect(normalizeSettings({ emoteTrigger }).emoteTrigger).toBe('mouse5');
+      expect(normalizeSettings({ emoteTrigger }).emoteTrigger).toBe('ctrl');
     }
   });
 
@@ -311,7 +311,7 @@ describe('emote settings', () => {
   });
 
   it('mac has no caps lock emote key', () => {
-    expect(normalizeSettings({ emoteTrigger: 'capslock' }, 'mac').emoteTrigger).toBe('mouse5');
+    expect(normalizeSettings({ emoteTrigger: 'capslock' }, 'mac').emoteTrigger).toBe('ctrl');
     expect(normalizeSettings({ emoteTrigger: 'off' }, 'mac').emoteTrigger).toBe('off');
     expect(normalizeSettings({ emoteTrigger: 'capslock' }, 'win').emoteTrigger).toBe('capslock');
   });
@@ -468,9 +468,9 @@ describe('emote key clashes', () => {
     expect(patchClashes(before, patch, 'win')).toBe(false);
     // macOS has no Caps Lock trigger, so the ping trigger falls back to Alt and meets the emote key.
     expect(patchClashes(before, patch, 'mac')).toBe(true);
-    // ...and an emote key of Caps Lock falls back to the default side button there.
-    expect(patchClashes({ ...current, trigger: 'mouse5' }, { emoteTrigger: 'capslock' }, 'win')).toBe(false);
-    expect(patchClashes({ ...current, trigger: 'mouse5' }, { emoteTrigger: 'capslock' }, 'mac')).toBe(true);
+    // ...and an emote key of Caps Lock falls back to the default Ctrl key there.
+    expect(patchClashes({ ...current, trigger: 'ctrl' }, { emoteTrigger: 'capslock' }, 'win')).toBe(false);
+    expect(patchClashes({ ...current, trigger: 'ctrl' }, { emoteTrigger: 'capslock' }, 'mac')).toBe(true);
   });
 
   it('a Caps Lock emote key clashes with a pause shortcut on Caps Lock, named or custom', () => {
@@ -485,8 +485,8 @@ describe('emote key clashes', () => {
   });
 
   it('patchClashes treats an unusable patch value the way normalizeSettings does', () => {
-    // 'meta' is not a trigger, so the emote key would become the default side button, which clashes with a side-button ping trigger.
-    expect(patchClashes({ ...current, trigger: 'mouse5', emoteTrigger: 'off' }, { emoteTrigger: 'meta' as never })).toBe(true);
+    // 'meta' is not a trigger, so the emote key would become the default Ctrl key, which clashes with a Ctrl ping trigger.
+    expect(patchClashes({ ...current, trigger: 'ctrl', emoteTrigger: 'off' }, { emoteTrigger: 'meta' as never })).toBe(true);
     expect(patchClashes(current, { emoteTrigger: 'meta' as never })).toBe(false);
   });
 });
@@ -602,8 +602,8 @@ describe('helpers', () => {
 
   it('repairs custom Caps Lock triggers on Mac when loading or updating settings', () => {
     const caps = { trigger: { vk: 0x14 }, emoteTrigger: { vk: 0x14 } };
-    expect(normalizeSettings(caps, 'mac')).toMatchObject({ trigger: 'alt', emoteTrigger: 'mouse5' });
-    expect(mergeSettings(DEFAULT_SETTINGS, caps, 'mac')).toMatchObject({ trigger: 'alt', emoteTrigger: 'mouse5' });
+    expect(normalizeSettings(caps, 'mac')).toMatchObject({ trigger: 'alt', emoteTrigger: 'ctrl' });
+    expect(mergeSettings(DEFAULT_SETTINGS, caps, 'mac')).toMatchObject({ trigger: 'alt', emoteTrigger: 'ctrl' });
     expect(normalizeSettings({ trigger: { vk: 0x14 }, emoteTrigger: 'off' }, 'win').trigger).toEqual({ vk: 0x14 });
   });
 
