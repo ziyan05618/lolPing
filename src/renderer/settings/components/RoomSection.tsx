@@ -118,7 +118,7 @@ export function RoomPolicyControls({ room }: { room: RoomState }) {
   const [notice, setNotice] = useState<keyof Pick<typeof t, 'invalid' | 'notOwner' | 'unavailable' | 'saved'> | null>(null);
   useEffect(() => {
     setDraft(Object.fromEntries(ROOM_POLICY_KEYS.map((k) => [k, String(limits[k])])));
-  }, [limits.emote_per_minute, limits.ping_per_second, limits.text_per_minute]);
+  }, [limits.signal_per_minute, limits.text_per_minute]);
   const save = async () => {
     const values = Object.fromEntries(ROOM_POLICY_KEYS.map((k) => [k, /^\d+$/.test(draft[k]) ? Number(draft[k]) : NaN]));
     const policy = parseRoomPolicy(values);
@@ -153,6 +153,12 @@ export function RoomPolicyControls({ room }: { room: RoomState }) {
           {owner ? <Button disabled={busy} onClick={() => void save()}>{t.save}</Button> : null}
         </div>
       </SettingRow>
+      {(() => {
+        const signal = owner ? Number(draft.signal_per_minute) : limits.signal_per_minute;
+        return Number.isInteger(signal) && signal > 0 && signal < 10
+          ? <p role="note" className="desc roomNote">{t.signalLowWarning}</p>
+          : null;
+      })()}
       {notice ? <p role="status" className="desc roomNote">{t[notice]}</p> : null}
     </div>
   );

@@ -15,10 +15,10 @@ const room = (owner: boolean, available = true): RoomState => ({
 });
 
 describe('RoomPolicyControls', () => {
-  it('shows three bounded integer inputs and save only for a verified owner', () => {
+  it('shows two bounded integer inputs and save only for a verified owner', () => {
     const html = renderToStaticMarkup(createElement(RoomPolicyControls, { room: room(true) }));
-    expect(html.match(/type="number"/g)).toHaveLength(3);
-    expect(html.match(/max="600"/g)).toHaveLength(3);
+    expect(html.match(/type="number"/g)).toHaveLength(2);
+    expect(html.match(/max="600"/g)).toHaveLength(2);
     expect(html).toContain(strings('en').roomPolicy.save);
   });
 
@@ -31,6 +31,13 @@ describe('RoomPolicyControls', () => {
     const zh = renderToStaticMarkup(createElement(TextContext.Provider, { value: t },
       createElement(RoomPolicyControls, { room: room(false, false) })));
     expect(zh).toContain(t.roomPolicy.defaults);
-    expect(zh).toContain(t.roomPolicy.emote_per_minute);
+    expect(zh).toContain(t.roomPolicy.signal_per_minute);
+  });
+
+  it('warns owners when their signal quota may block calls during a fight', () => {
+    const low = room(true);
+    low.policy.limits.signal_per_minute = 5;
+    const html = renderToStaticMarkup(createElement(RoomPolicyControls, { room: low }));
+    expect(html).toContain(strings('en').roomPolicy.signalLowWarning);
   });
 });

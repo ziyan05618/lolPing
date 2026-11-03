@@ -29,10 +29,28 @@ describe('RoomPolicyClient', () => {
 
   it('rejects responses for another topic and malformed policy data', async () => {
     for (const data of [{ topic: 'other', claimed: true, ...DEFAULT_ROOM_POLICY }, {},
-      { topic: 'abc', claimed: true, ...DEFAULT_ROOM_POLICY, ping_per_second: -1 }]) {
+      { topic: 'abc', claimed: true, ...DEFAULT_ROOM_POLICY, signal_per_minute: -1 }]) {
       await expect(new RoomPolicyClient(async () => Response.json(data)).read('abc')).rejects.toThrow();
     }
     await expect(new RoomPolicyClient(async () => Response.json({ owner: true })).claim('abc', 'x')).rejects.toThrow();
+  });
+
+  it('reads legacy policy responses and writes the merged public fields', async () => {
+    const bodies: unknown[] = [];
+    const client = new RoomPolicyClient(async (url, init) => {
+      if (init?.body) bodies.push(JSON.parse(String(init.body)));
+      return String(url).endsWith('/policy/abc')
+        ? Response.json({ topic: 'abc', claimed: true, emote_per_minute: 9, ping_per_second: 5, text_per_minute: 4 })
+        : Response.json({ ok: true });
+    });
+    expect(await client.read('abc')).toEqual({
+      claimed: true, limits: { signal_per_minute: 9, text_per_minute: 4 },
+    });
+    expect(await client.write('abc', 'owner-token', { signal_per_minute: 9, text_per_minute: 4 }))
+      .toEqual({ ok: true });
+    expect(bodies).toEqual([{
+      topic: 'abc', member_token: 'owner-token', signal_per_minute: 9, text_per_minute: 4,
+    }]);
   });
 
   it('returns save outcomes for owner errors, invalid quotas and network failures', async () => {

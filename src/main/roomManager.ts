@@ -377,15 +377,15 @@ export class RoomManager extends EventEmitter {
     }
   }
 
-  /** A sliding window per public key, shared by every route and by local display and publish. */
+  /** A sliding window per public key, shared by ping and emote traffic across every route. */
   private allowPolicy(pubkey: string, type: RoomEventType): { allowed: boolean; retryAfterMs: number } {
     if (type === 'vote') return { allowed: true, retryAfterMs: 0 };
-    const limit = type === 'emote' ? this.policyState.limits.emote_per_minute
-      : type === 'text' ? this.policyState.limits.text_per_minute : this.policyState.limits.ping_per_second;
+    const signal = type === 'ping' || type === 'emote';
+    const limit = signal ? this.policyState.limits.signal_per_minute : this.policyState.limits.text_per_minute;
     if (limit === 0) return { allowed: true, retryAfterMs: 0 };
     const now = this.deps.now();
-    const window = type === 'ping' ? 1000 : 60_000;
-    const key = `${pubkey}:${type}`;
+    const window = 60_000;
+    const key = `${pubkey}:${signal ? 'signal' : 'text'}`;
     const times = (this.policyWindows.get(key) ?? []).filter((at) => now - at < window);
     this.policyWindows.set(key, times);
     if (times.length >= limit) {
@@ -738,8 +738,7 @@ export class RoomManager extends EventEmitter {
     if (now - this.policyRequestedAt >= POLICY_REFRESH_MS
       || (this.deps.memberToken && now - this.policyHeartbeatAt >= POLICY_HEARTBEAT_MS)) void this.refreshPolicy();
     for (const [key, times] of this.policyWindows) {
-      const window = key.endsWith(':ping') ? 1000 : 60_000;
-      const live = times.filter((at) => now - at < window);
+      const live = times.filter((at) => now - at < 60_000);
       if (live.length) this.policyWindows.set(key, live);
       else this.policyWindows.delete(key);
     }

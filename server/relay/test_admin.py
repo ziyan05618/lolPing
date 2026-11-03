@@ -3,6 +3,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -77,11 +78,38 @@ class RoomPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], False)
         self.assertEqual((await self.heartbeat(OTHER))[1]["claimed"], True)
         self.assertEqual(await self.request("/policy", {"topic": TOPIC, "token": TOKEN,
-                                                          **{**admin.DEFAULT_POLICY, "emote_per_minute": 7}}),
+                                                          **{**admin.DEFAULT_POLICY, "signal_per_minute": 7}}),
                          (200, {"ok": True}))
         self.assertEqual(await self.leave_member(TOKEN), (200, {"ok": True}))
         self.assertEqual((await self.heartbeat(OTHER))[1]["owner"], True)
-        self.assertEqual((await self.request(f"/policy/{TOPIC}"))[1]["emote_per_minute"], 7)
+        self.assertEqual((await self.request(f"/policy/{TOPIC}"))[1]["signal_per_minute"], 7)
+
+    async def test_migration_copies_existing_emote_quota_into_signal_quota(self):
+        path = str(Path(self.temp.name) / "legacy.db")
+        legacy = sqlite3.connect(path)
+        legacy.executescript("""
+            CREATE TABLE room_owner (
+              topic TEXT PRIMARY KEY, owner_token TEXT NOT NULL, claimed_at INTEGER NOT NULL, last_seen INTEGER NOT NULL
+            );
+            CREATE TABLE room_policy (
+              topic TEXT PRIMARY KEY REFERENCES room_owner(topic),
+              emote_per_minute INTEGER NOT NULL DEFAULT 20,
+              ping_per_second INTEGER NOT NULL DEFAULT 5,
+              text_per_minute INTEGER NOT NULL DEFAULT 10,
+              updated_at INTEGER NOT NULL
+            );
+        """)
+        legacy.execute("INSERT INTO room_owner VALUES (?,?,?,?)", (TOPIC, TOKEN, self.now, self.now))
+        legacy.execute("INSERT INTO room_policy VALUES (?,?,?,?,?)", (TOPIC, 17, 4, 8, self.now))
+        legacy.commit()
+        legacy.close()
+        migrated = admin.Tracker(path, now=lambda: self.now)
+        try:
+            self.assertEqual(migrated._conn.execute(
+                "SELECT signal_per_minute, emote_per_minute, ping_per_second FROM room_policy WHERE topic=?",
+                (TOPIC,)).fetchone(), (17, 17, 4))
+        finally:
+            migrated._conn.close()
 
     async def test_timeout_transfers_to_oldest_active_member_and_late_owner_stays_non_owner(self):
         self.assertEqual((await self.heartbeat(TOKEN))[1]["owner"], True)
@@ -121,14 +149,21 @@ class RoomPolicyTests(unittest.IsolatedAsyncioTestCase):
         await self.claim()
         payload = {"topic": TOPIC, "token": OTHER, **admin.DEFAULT_POLICY}
         self.assertEqual(await self.request("/policy", payload), (403, {"error": "not owner"}))
-        payload.update(token=TOKEN, emote_per_minute=3, ping_per_second=0, text_per_minute=600)
+        payload.update(token=TOKEN, signal_per_minute=3, text_per_minute=600)
         self.assertEqual(await self.request("/policy", payload), (200, {"ok": True}))
         status, result = await self.request(f"/policy/{TOPIC}")
         self.assertEqual(status, 200)
         self.assertEqual(result, {"topic": TOPIC, "claimed": True,
-                                  "emote_per_minute": 3, "ping_per_second": 0, "text_per_minute": 600})
+                                  "signal_per_minute": 3, "text_per_minute": 600,
+                                  "emote_per_minute": 3, "ping_per_second": 0})
         self.assertNotIn(TOKEN, json.dumps(result))
         self.assertNotIn("ip", result)
+        legacy_payload = {"topic": TOPIC, "token": TOKEN, "emote_per_minute": 99,
+                          "ping_per_second": 100, "text_per_minute": 99}
+        self.assertEqual(await self.request("/policy", legacy_payload), (200, {"ok": True}))
+        current = (await self.request(f"/policy/{TOPIC}"))[1]
+        self.assertEqual(current["signal_per_minute"], 3)
+        self.assertEqual(current["text_per_minute"], 600)
 
     async def test_unclaimed_room_is_public_and_cannot_be_updated(self):
         with patch.object(admin, "ADMIN_TOKEN", "admin-secret"):

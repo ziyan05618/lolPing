@@ -32,7 +32,8 @@ ROOM_LABEL_LEN = 10
 OWNER_TTL = 86400
 TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 TOKEN_RE = re.compile(r"[0-9a-fA-F]{32}\Z")
-DEFAULT_POLICY = {"emote_per_minute": 20, "ping_per_second": 5, "text_per_minute": 10}
+DEFAULT_POLICY = {"signal_per_minute": 20, "text_per_minute": 10}
+LEGACY_POLICY_FIELDS = {"emote_per_minute", "ping_per_second"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS room_policy (
   emote_per_minute INTEGER NOT NULL DEFAULT 20,
   ping_per_second INTEGER NOT NULL DEFAULT 5,
   text_per_minute INTEGER NOT NULL DEFAULT 10,
+  signal_per_minute INTEGER NOT NULL DEFAULT 20,
   updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS room_member (
@@ -160,6 +162,12 @@ class Tracker:
             self._conn = sqlite3.connect(self.path, check_same_thread=False)
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(SCHEMA)
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(room_policy)")}
+            if "signal_per_minute" not in columns:
+                self._conn.execute("ALTER TABLE room_policy ADD COLUMN signal_per_minute INTEGER NOT NULL DEFAULT 20")
+                self._conn.execute("UPDATE room_policy SET signal_per_minute = emote_per_minute")
+            else:
+                self._conn.execute("UPDATE room_policy SET signal_per_minute = COALESCE(signal_per_minute, emote_per_minute, 20)")
             self._conn.commit()
         except (OSError, sqlite3.Error) as err:
             # A read-only or missing data dir must not take the relay down; the admin page then shows memory only.
@@ -235,9 +243,10 @@ class Tracker:
         db.execute("DELETE FROM room_member WHERE last_seen <= ?", (now - OWNER_TTL,))
 
     def _policy_limits(self, db: sqlite3.Connection, topic: str) -> dict[str, int]:
-        row = db.execute("SELECT emote_per_minute, ping_per_second, text_per_minute FROM room_policy"
+        row = db.execute("SELECT signal_per_minute, text_per_minute FROM room_policy"
                          " WHERE topic = ?", (topic,)).fetchone()
-        return dict(zip(DEFAULT_POLICY, row)) if row is not None else dict(DEFAULT_POLICY)
+        policy = dict(zip(DEFAULT_POLICY, row)) if row is not None else dict(DEFAULT_POLICY)
+        return {**policy, "emote_per_minute": policy["signal_per_minute"], "ping_per_second": 0}
 
     def _register_member(self, db: sqlite3.Connection, topic: str, token: str, now: int) -> None:
         joined = db.execute("SELECT joined_at FROM room_member WHERE topic=? AND member_token=?",
@@ -336,12 +345,12 @@ class Tracker:
         now = int(self.now())
         with db:
             self._expire_owners(db, now)
-            row = db.execute("SELECT emote_per_minute, ping_per_second, text_per_minute FROM room_policy"
+            row = db.execute("SELECT signal_per_minute, text_per_minute FROM room_policy"
                              " WHERE topic = ?", (topic,)).fetchone()
             if row is None:
                 return {"topic": topic, "claimed": False}
             db.execute("UPDATE room_owner SET last_seen = ? WHERE topic = ?", (now, topic))
-        return {"topic": topic, "claimed": True, **dict(zip(DEFAULT_POLICY, row))}
+        return {"topic": topic, "claimed": True, **self._policy_limits(db, topic)}
 
     def is_owner(self, topic: str, token: str) -> bool:
         """Whether this token owns the topic. Checked before the payload is validated, so someone who does not own
@@ -360,7 +369,7 @@ class Tracker:
             row = db.execute("SELECT owner_token FROM room_owner WHERE topic = ?", (topic,)).fetchone()
             if row is None or not secrets.compare_digest(row[0], token):
                 return False
-            db.execute("UPDATE room_policy SET emote_per_minute=?, ping_per_second=?, text_per_minute=?,"
+            db.execute("UPDATE room_policy SET signal_per_minute=?, text_per_minute=?,"
                        " updated_at=? WHERE topic=?", (*[policy[k] for k in DEFAULT_POLICY], now, topic))
             db.execute("UPDATE room_owner SET last_seen=? WHERE topic=?", (now, topic))
         return True
@@ -469,9 +478,9 @@ class Tracker:
         if self._conn:
             with self._conn:
                 self._expire_owners(self._conn, int(self.now()))
-            for topic, emote, ping, text in self._conn.execute(
-                    "SELECT topic, emote_per_minute, ping_per_second, text_per_minute FROM room_policy"):
-                policies[room_label(topic)] = dict(zip(DEFAULT_POLICY, (emote, ping, text)))
+            for topic, signal, text in self._conn.execute(
+                    "SELECT topic, signal_per_minute, text_per_minute FROM room_policy"):
+                policies[room_label(topic)] = {"signal_per_minute": signal, "text_per_minute": text}
         live: dict[str, int] = {}
         for s in self.live.values():
             for r in s.rooms:
@@ -619,13 +628,17 @@ async def _serve_admin(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
                 if not tracker.is_owner(topic, token):
                     writer.write(_json(403, {"error": "not owner"}))
                 else:
-                    policy = {key: payload.get(key) for key in DEFAULT_POLICY}
-                    if any(type(v) is not int or v < 0 or v > 600 for v in policy.values()):
-                        writer.write(_json(400, {"error": "quotas must be integers from 0 to 600"}))
-                    elif tracker.write_policy(topic, token, policy):
+                    if "signal_per_minute" not in payload and LEGACY_POLICY_FIELDS.intersection(payload):
+                        # Older clients still send the retired quota fields. Accept their save without changing policy.
                         writer.write(_json(200, {"ok": True}))
                     else:
-                        writer.write(_json(403, {"error": "not owner"}))
+                        policy = {key: payload.get(key) for key in DEFAULT_POLICY}
+                        if any(type(v) is not int or v < 0 or v > 600 for v in policy.values()):
+                            writer.write(_json(400, {"error": "quotas must be integers from 0 to 600"}))
+                        elif tracker.write_policy(topic, token, policy):
+                            writer.write(_json(200, {"ok": True}))
+                        else:
+                            writer.write(_json(403, {"error": "not owner"}))
             else:
                 writer.write(_json(405, {"error": "method not allowed"}))
             return

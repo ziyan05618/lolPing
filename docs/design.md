@@ -378,15 +378,16 @@ policy. Member and policy records expire after 24 hours without activity.
 
 `RoomManager` starts transports without waiting for HTTP. It fetches quotas on entry and every 10 seconds while
 internet connections are allowed; member heartbeats are sent every 15 seconds. Reads and writes time out after 5 seconds. Failures use built-in quotas:
-20 emotes per minute, 5 pings per second and 10 text lines per minute, per sender. With internet off there are no
-policy requests. Limits are integers from 0 to 600; 0 skips that class. A save takes effect here immediately and
-on other clients at their next refresh. A late response from a previous room or before a save cannot replace
-newer state. Reducing a quota keeps its existing window and affects later messages only.
+20 signals and 10 text lines per minute, per sender. A signal is a ping or emote; both use the same 60-second
+sliding window and counter. With internet off there are no policy requests. Limits are integers from 0 to 600;
+0 skips that class. A save takes effect here immediately and on other clients at their next refresh. A late
+response from a previous room or before a save cannot replace newer state. Reducing a quota keeps its existing
+window and affects later messages only.
 
 Sliding windows live in `RoomManager`, after validation and replay rejection. Signed peers use their proved
 Ed25519 public key, which is stable across LAN and relay routes during a join. Unsigned relay peers use the
-Nostr sender pubkey, and unsigned LAN peers use their transport address. Pings use one second; emotes and text
-use 60 seconds. Alive lines share text quota. Votes and ballots keep their existing guards. Duplicate packets
+Nostr sender pubkey, and unsigned LAN peers use their transport address. Pings and emotes share the
+`${pubkey}:signal` bucket for 60 seconds; text and alive lines share their own 60-second bucket. Votes and ballots keep their existing guards. Duplicate packets
 from different routes consume one slot. Excess packets are dropped with a debug log, before rendering.
 The sender applies the same check before publishing and before local display. Existing personal limits and
 relay pacing still apply. Updated clients enforce policy cooperatively; older apps keep their existing local
@@ -402,7 +403,7 @@ and published only on that topic. Over LAN, it uses the same pairwise key and is
 observed address. Both participants subscribe to a relay topic; other room members do not. A room-topic ping or emote
 carrying `to` is rejected, as is a LAN room-key packet carrying `to`. A private message is accepted only when it
 decrypts with the paired key, comes from the paired member and names the local peer as its recipient. Private sends
-use the sender's normal ping or emote quota and never fall back to the room topic. Older clients do not announce an
+use the sender's shared signal quota for pings and emotes and never fall back to the room topic. Older clients do not announce an
 X25519 key and are not offered as whisper targets; when a target loses its private channel, the send fails visibly
 without drawing a local ping or emote.
 

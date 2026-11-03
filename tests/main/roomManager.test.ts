@@ -388,11 +388,11 @@ describe('incoming pings', () => {
     expect(pings).toHaveLength(2);
     profile.limit = 0;
     for (let i = 0; i < 50; i++) alex.ping();
-    expect(pings).toHaveLength(2);
+    expect(pings).toHaveLength(17);
     await vi.advanceTimersByTimeAsync(1000);
     alex.presence();
     for (let i = 0; i < 50; i++) alex.ping();
-    expect(pings).toHaveLength(7);
+    expect(pings).toHaveLength(17);
   });
 
   it('drops a ping when there is no display to show it on', () => {
@@ -691,7 +691,7 @@ describe('internet over a shared transport', () => {
       announceEmotes: () => [],
       policy: {
         token: () => undefined, saveToken: () => undefined, claim: async () => false,
-        read: async () => ({ claimed: true, limits: { emote_per_minute: 0, ping_per_second: 0, text_per_minute: 0 } }),
+        read: async () => ({ claimed: true, limits: { signal_per_minute: 0, text_per_minute: 0 } }),
         write: async () => ({ ok: true }),
       },
     });
@@ -754,7 +754,7 @@ describe('internet over a shared transport', () => {
     const relay = new FakeWhisperTransport('internet');
     const policy: RoomPolicyService = {
       token: () => undefined, saveToken: () => undefined, claim: async () => false,
-      read: async () => ({ claimed: true, limits: { emote_per_minute: 20, ping_per_second: 1, text_per_minute: 10 } }),
+      read: async () => ({ claimed: true, limits: { signal_per_minute: 5, text_per_minute: 10 } }),
       write: async () => ({ ok: true }),
     };
     const manager = new RoomManager({
@@ -772,15 +772,17 @@ describe('internet over a shared transport', () => {
     }), undefined, KEYS.relayTopic);
     relay.published = [];
 
-    expect(manager.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, recipient.peer)).toBe(true);
-    expect(manager.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, recipient.peer)).toBe(false);
-    expect(relay.published).toHaveLength(1);
+    const sends = Array.from({ length: 6 }, () => manager.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, recipient.peer));
+    expect(sends).toEqual([true, true, true, true, true, false]);
+    expect(manager.sendEmote('gg', { d: 1, x: 0.2, y: 0.3 }, undefined, recipient.peer)).toBe(false);
+    expect(relay.published).toHaveLength(5);
     expect(relay.published[0].topic).not.toBe(KEYS.relayTopic);
     expect(relay.published[0].type).toBe('ping');
     expect(relay.whisperTopics).toContain(relay.published[0].topic);
-    expect(cooldowns).toHaveLength(1);
+    expect(cooldowns).toHaveLength(2);
     expect(cooldowns[0].type).toBe('ping');
     expect(cooldowns[0].retryAfterMs).toBeGreaterThan(0);
+    expect(cooldowns[1].type).toBe('emote');
     manager.quit();
   });
 
@@ -1170,13 +1172,37 @@ describe('RoomManager room policy', () => {
     expect(cooldowns[0].retryAfterMs).toBeGreaterThan(0);
   });
 
-  it('counts pings by a sliding second and shares the text minute with alive lines', async () => {
+  it('uses one local sender bucket for emotes followed by pings', async () => {
+    limits.signal_per_minute = 2;
+    await joinActive();
+    lan.sent = [];
+    expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
+    expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
+    expect(room.sendPing('omw', { d: 1, x: 0, y: 0 })).toBe(false);
+    expect(cooldowns.at(-1)).toMatchObject({ type: 'ping', retryAfterMs: 60_000 });
+  });
+
+  it('counts pings and emotes in one sliding minute and shares the text minute with alive lines', async () => {
+    limits.signal_per_minute = 5;
     await joinActive();
     const a = new SignedRemote(1, 'lan:a', lan);
+    const b = new SignedRemote(2, 'lan:b', lan);
     a.presence();
-    for (let i = 0; i < 6; i++) a.ping();
+    b.presence();
+    for (let i = 0; i < 3; i++) a.ping();
+    for (let i = 0; i < 3; i++) a.emote();
+    expect(pings).toHaveLength(3);
+    expect(emotes).toHaveLength(2);
+    for (let i = 0; i < 3; i++) b.emote();
+    for (let i = 0; i < 3; i++) b.ping();
+    expect(emotes).toHaveLength(5);
     expect(pings).toHaveLength(5);
-    await vi.advanceTimersByTimeAsync(999);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(14_000);
+      a.presence();
+      b.presence();
+    }
+    await vi.advanceTimersByTimeAsync(3_999);
     a.ping();
     expect(pings).toHaveLength(5);
     await vi.advanceTimersByTimeAsync(1);
@@ -1198,7 +1224,7 @@ describe('RoomManager room policy', () => {
   });
 
   it('counts duplicate packets once before checking the quota on another route', async () => {
-    limits.emote_per_minute = 2;
+    limits.signal_per_minute = 2;
     await joinActive();
     const a = new SignedRemote(1, 'lan:a', lan);
     a.presence();
@@ -1211,8 +1237,7 @@ describe('RoomManager room policy', () => {
   });
 
   it('uses the relay public key for unsigned peers and treats missing tags as pings', async () => {
-    limits.ping_per_second = 2;
-    limits.emote_per_minute = 1;
+    limits.signal_per_minute = 2;
     await joinActive();
     const a = new Remote('1111111111111111', 'net:pubkey', net);
     const b = new Remote('2222222222222222', 'net:pubkey', net);
@@ -1222,12 +1247,13 @@ describe('RoomManager room policy', () => {
     b.emote();
     a.emote();
     expect(emotes).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    a.presence();
     a.emote();
     expect(emotes).toHaveLength(3);
   });
 
-  it.each(['ping', 'text', 'vote'])('rejects a conflicting %s label that would bypass an emote quota', async (type) => {
+  it.each(['ping', 'text', 'vote'])('rejects a conflicting %s label on an emote packet', async (type) => {
     await joinActive();
     const a = new SignedRemote(1, 'net:a', net);
     a.presence();
@@ -1238,21 +1264,21 @@ describe('RoomManager room policy', () => {
   it('allows zero quotas and applies a smaller saved quota to later messages without clearing the window', async () => {
     await room.create();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await room.setPolicy({ emote_per_minute: 0, ping_per_second: 0, text_per_minute: 0 })).toEqual({ ok: true });
+    expect(await room.setPolicy({ signal_per_minute: 0, text_per_minute: 0 })).toEqual({ ok: true });
     for (let i = 0; i < 100; i++) expect(room.sendText('hello', { d: 1, x: 0, y: 0 })).toBe(true);
     await room.setPolicy(DEFAULT_ROOM_POLICY);
     expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
     expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(true);
-    expect(await room.setPolicy({ ...DEFAULT_ROOM_POLICY, emote_per_minute: 1 })).toEqual({ ok: true });
+    expect(await room.setPolicy({ ...DEFAULT_ROOM_POLICY, signal_per_minute: 1 })).toEqual({ ok: true });
     expect(room.sendEmote('gg', { d: 1, x: 0, y: 0 })).toBe(false);
-    expect(await room.setPolicy({ ...DEFAULT_ROOM_POLICY, emote_per_minute: -1 })).toEqual({ ok: false, error: 'invalid' });
+    expect(await room.setPolicy({ ...DEFAULT_ROOM_POLICY, signal_per_minute: -1 })).toEqual({ ok: false, error: 'invalid' });
   });
 
   it('refreshes while in the room, falls back on failure, and makes no requests with internet off', async () => {
     await joinActive();
-    limits.emote_per_minute = 3;
+    limits.signal_per_minute = 3;
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(room.state().policy.limits.emote_per_minute).toBe(3);
+    expect(room.state().policy.limits.signal_per_minute).toBe(3);
     service.read = async () => { throw new Error('offline'); };
     await vi.advanceTimersByTimeAsync(10_000);
     expect(room.state().policy.limits).toEqual(DEFAULT_ROOM_POLICY);
@@ -1271,7 +1297,7 @@ describe('RoomManager room policy', () => {
     service.read = () => new Promise((resolve) => { finish = resolve; });
     await joinActive();
     room.leave();
-    finish?.({ claimed: true, limits: { ...DEFAULT_ROOM_POLICY, emote_per_minute: 1 } });
+    finish?.({ claimed: true, limits: { ...DEFAULT_ROOM_POLICY, signal_per_minute: 1 } });
     await vi.advanceTimersByTimeAsync(0);
     expect(room.state().phase).toBe('idle');
     expect(room.state().policy).toMatchObject({ available: false, limits: DEFAULT_ROOM_POLICY });
@@ -1660,19 +1686,19 @@ describe('signed members', () => {
     lan.sent = [];
 
     const pingResults = Array.from({ length: 6 }, () => room.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, sam.peer));
-    expect(pingResults).toEqual([true, true, true, true, true, false]);
+    expect(pingResults).toEqual([true, true, true, true, true, true]);
     room.sendEmote('gg', { d: 1, x: 0.2, y: 0.3 }, undefined, sam.peer);
 
     const direct = lan.sent.filter((sent) => sent.to === sam.key);
-    expect(direct).toHaveLength(6);
+    expect(direct).toHaveLength(7);
     const decoded = direct.map(({ packet }) => {
       expect(open(KEYS.msgKey, packet)).toBeNull();
       const plain = open(messageKey, packet);
       if (!plain) throw new Error('private LAN packet was not pairwise encrypted');
       return decodeSigned(plain)?.msg;
     });
-    expect(decoded.slice(0, 5).every((message) => message?.t === 'ping' && message.to === sam.peer)).toBe(true);
-    expect(decoded[5]).toMatchObject({ t: 'emote', to: sam.peer });
+    expect(decoded.slice(0, 6).every((message) => message?.t === 'ping' && message.to === sam.peer)).toBe(true);
+    expect(decoded[6]).toMatchObject({ t: 'emote', to: sam.peer });
 
     const before = pings.length;
     sam.ping({ to: room.self });

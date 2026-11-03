@@ -7,10 +7,10 @@ import { DEFAULT_ROOM_POLICY } from '../../src/shared/roomPolicy';
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
 
 describe('relay admin room policy', () => {
-  it('shows room ownership and all quotas as text in the selected language', () => {
+  it('shows room ownership and both quotas as text in the selected language', () => {
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-CN');
     document.body.innerHTML = '<div id="policy"></div>';
-    render('policy', [{ room: 'a'.repeat(10), owner: true, policy: { ...DEFAULT_ROOM_POLICY, ping_per_second: 0 } }], () => undefined, '');
+    render('policy', [{ room: 'a'.repeat(10), owner: true, policy: { ...DEFAULT_ROOM_POLICY, signal_per_minute: 0 } }], () => undefined, '');
     expect(document.body.textContent).toContain(strings('zh-CN').roomPolicy.ownerPresent);
     expect(document.body.textContent).toContain(strings('zh-CN').roomPolicy.unlimited);
     expect(document.querySelectorAll('tbody tr')).toHaveLength(1);
