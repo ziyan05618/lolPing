@@ -13,7 +13,7 @@ import {
 import { RateLimiter } from './rateLimiter';
 import { ReplayGuard } from './replayGuard';
 import {
-  makeIdentity, open, peerIdOf, publicKeyOf, publicWhisperKeyOf, seal, signBody, verifyBody, whisperMessageKey,
+  isSelfPresenceProof, makeIdentity, open, peerIdOf, publicKeyOf, publicWhisperKeyOf, seal, selfPresenceProof, signBody, verifyBody, whisperMessageKey,
   whisperSecret, whisperTopic, type RoomIdentity, type RoomKeys,
 } from './roomCrypto';
 import type { PeerKey, Transport, TransportStatus } from './transport';
@@ -169,6 +169,7 @@ export class RoomManager extends EventEmitter {
   private phase: RoomStateCore['phase'] = 'idle';
   private code: string | null = null;
   private keys: RoomKeys | null = null;
+  private selfProof: string | null = null;
   /** Bumped on every join and leave, so a join still deriving keys can tell it was cancelled. */
   private session = 0;
   private seq = 0;
@@ -603,6 +604,8 @@ export class RoomManager extends EventEmitter {
     }
     if (session !== this.session) return true; // left while deriving
     this.keys = keys;
+    const memberToken = this.deps.memberToken?.();
+    this.selfProof = memberToken ? selfPresenceProof(memberToken, keys.relayTopic, this.self) : null;
     // Keep the legacy per-room token for old policy service implementations; new clients use memberToken heartbeats.
     if (create && this.deps.policy && !this.deps.memberToken && !this.deps.policy.token(keys.relayTopic)) {
       this.deps.policy.saveToken(keys.relayTopic, Buffer.from(this.deps.randomBytes(16)).toString('hex'));
@@ -669,6 +672,7 @@ export class RoomManager extends EventEmitter {
     this.ticker = this.settle = null;
     this.phase = 'idle';
     this.code = this.keys = null;
+    this.selfProof = null;
     for (const m of this.members.keys()) this.emit('memberGone', m);
     this.members.clear();
     this.whisperChannels.clear();
@@ -731,6 +735,11 @@ export class RoomManager extends EventEmitter {
       if (!pk || !verifyBody(pk, body, sig)) return;
     } else if (this.boundIds.has(msg.peer)) {
       return;
+    }
+    // A peer-bound MAC prevents another member from copying our marker to hide themselves.
+    if (sig && msg.t === 'presence' && this.keys) {
+      const memberToken = this.deps.memberToken?.();
+      if (memberToken && isSelfPresenceProof(memberToken, this.keys.relayTopic, msg.peer, msg.selfProof)) return;
     }
     const guard = sig ? this.signedGuard : this.unsignedGuard;
     const verdict = guard.accept(msg.peer, msg.seq, msg.ts);
@@ -944,6 +953,7 @@ export class RoomManager extends EventEmitter {
     return this.seal({
       t: 'presence', proto: PROTOCOL_VERSION, app: this.deps.appVersion, name: p.name, color: p.color, status: this.status(),
       em: [...this.deps.announceEmotes()], pk: this.identity.pk.toString('base64'), xk: this.identity.xk.toString('base64'),
+      ...(this.selfProof ? { selfProof: this.selfProof } : {}),
       // Left out when nothing is off, so a presence to an older peer carries nothing new.
       ...(p.nf.length ? { nf: [...p.nf] } : {}),
       // Left out rather than sent as null: a peer on an older build ignores it either way, and this keeps the packet small.

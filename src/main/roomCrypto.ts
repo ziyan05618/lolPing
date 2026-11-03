@@ -1,5 +1,5 @@
 import {
-  createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, hkdfSync, randomBytes, scrypt, sign, verify,
+  createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, hkdfSync, randomBytes, scrypt, sign, timingSafeEqual, verify,
   type KeyObject,
 } from 'node:crypto';
 
@@ -21,6 +21,24 @@ export interface RoomKeys {
 export interface WhisperIdentity {
   publicKey: Buffer;
   privateKey: KeyObject;
+}
+
+/** A room- and session-scoped proof that doesn't reveal the installation token. */
+export function selfPresenceProof(memberToken: string, relayTopic: string, peer: string): string | null {
+  if (!/^[0-9a-f]{32}$/i.test(memberToken)) return null;
+  return createHmac('sha256', Buffer.from(memberToken, 'hex'))
+    .update('lolping/self-presence/v1\0')
+    .update(relayTopic)
+    .update('\0')
+    .update(peer)
+    .digest('hex');
+}
+
+/** Checks a signed presence proof without allowing another peer to copy it. */
+export function isSelfPresenceProof(memberToken: string, relayTopic: string, peer: string, proof: string | undefined): boolean {
+  if (!proof || !/^[0-9a-f]{64}$/i.test(proof)) return false;
+  const expected = selfPresenceProof(memberToken, relayTopic, peer);
+  return expected !== null && timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(proof, 'hex'));
 }
 
 /** Room code → keys. scrypt makes guessing a code from a relay topic impractical; HKDF gives each key one job. */

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  makeIdentity, open, peerIdOf, publicKeyOf, seal, signBody, verifyBody, type RoomIdentity, type RoomKeys,
+  isSelfPresenceProof, makeIdentity, open, peerIdOf, publicKeyOf, seal, selfPresenceProof, signBody, verifyBody, type RoomIdentity, type RoomKeys,
 } from '../../src/main/roomCrypto';
 import {
   MAX_MEMBERS, RoomManager, type RemoteEmote, type RemotePing, type RemoteText, type RoomToast,
@@ -17,6 +17,7 @@ import { FakeTransport } from './fixtures/fakeTransport';
 const KEYS: RoomKeys = { msgKey: Buffer.alloc(32, 1), relayTopic: 'room' };
 const CODE = makeRoomCode(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9]));
 const SELF = peerIdOf(makeIdentity(new Uint8Array(32).fill(0xab)).pk);
+const MEMBER_TOKEN = 'cd'.repeat(16);
 
 /** Another lolPing in the room, sending through the fake transport. */
 class Remote {
@@ -70,6 +71,13 @@ class SignedRemote extends Remote {
   }
 }
 
+class FakeWhisperTransport extends FakeTransport {
+  broadcastOn(_topic: string, packet: Uint8Array): boolean {
+    this.sent.push({ to: '*', packet });
+    return true;
+  }
+}
+
 /** An unsigned packet claiming to be from `peer`, as a hostile member (or a 0.5.1 app) could send. */
 function forged(peer: string, m: Record<string, unknown>, seq = 1): Buffer {
   return seal(KEYS.msgKey, encodeMessage({ peer, seq, ts: Date.now(), ...m } as RoomMessage));
@@ -110,6 +118,7 @@ beforeEach(() => {
     randomBytes: (n) => new Uint8Array(n).fill(0xab),
     deriveKeys: async () => KEYS,
     appVersion: '0.3.0',
+    memberToken: () => MEMBER_TOKEN,
     profile: () => profile,
     resolveTarget: (d) => (d === 1 ? { displayId: 100, width: 1920, height: 1080 } : null),
     announceEmotes: () => [],
@@ -664,10 +673,11 @@ describe('internet over a shared transport', () => {
   let net: FakeTransport;
   let inet: RoomManager;
   let gone: RoomToast[];
-  const make = (transports: FakeTransport[]): RoomManager => {
+  const make = (transports: FakeTransport[], memberToken?: () => string): RoomManager => {
     const r = new RoomManager({
       transports, now: () => Date.now(), randomBytes: (n) => new Uint8Array(n).fill(0xef),
       deriveKeys: async () => KEYS, appVersion: '0.4.0', profile: () => profile,
+      ...(memberToken ? { memberToken } : {}),
       resolveTarget: () => ({ displayId: 1, width: 100, height: 100 }),
       announceEmotes: () => [],
       policy: {
@@ -704,6 +714,31 @@ describe('internet over a shared transport', () => {
     inet.sendPing('omw', { d: 1, x: 0.5, y: 0.5 });
     expect(net.sent.map((s) => s.to)).toEqual(['*']);
     expect(decode(net)[0]).toMatchObject({ t: 'ping', ping: 'omw' });
+  });
+
+  it('keeps a signed same-name player in whisper members while ignoring the previous self session', async () => {
+    const relay = new FakeWhisperTransport('internet');
+    const manager = make([relay], () => MEMBER_TOKEN);
+    await manager.join(CODE);
+    await vi.advanceTimersByTimeAsync(3000);
+    const ownPeer = manager.state().members[0].peer;
+    const oldSelf = new SignedRemote(0x61, 'net:old-self', relay);
+    const selfProof = selfPresenceProof(MEMBER_TOKEN, KEYS.relayTopic, oldSelf.peer)!;
+    const oldPresence = oldSelf.packet({
+      t: 'presence', proto: 1, app: '0.4.0', name: 'Me', color: 3, status: 'on', selfProof,
+    });
+    expect(isSelfPresenceProof(MEMBER_TOKEN, KEYS.relayTopic, oldSelf.peer, selfProof)).toBe(true);
+    expect(decodeSigned(open(KEYS.msgKey, oldPresence)!)?.msg).toMatchObject({ peer: oldSelf.peer, selfProof });
+    relay.deliver(oldSelf.key, oldPresence, undefined, KEYS.relayTopic);
+
+    const namesake = new SignedRemote(0x62, 'net:namesake', relay);
+    relay.deliver(namesake.key, namesake.packet({
+      t: 'presence', proto: 1, app: '0.4.0', name: 'Me', color: 3, status: 'on', selfProof,
+    }), undefined, KEYS.relayTopic);
+
+    expect(manager.state().members.map(({ peer }) => peer)).toEqual([ownPeer, namesake.peer]);
+    expect(manager.whisperMembers()).toEqual([{ peer: namesake.peer, name: 'Me' }]);
+    manager.quit();
   });
 
   it('caps pings over a shared transport at 5/s with bursts of 10, while LAN members still get every ping', async () => {
@@ -853,6 +888,20 @@ describe('internet over a shared transport', () => {
     expect(inet.state().members[1].path).not.toBe('internet');
     inet.sendPing('omw', { d: 1, x: 0.5, y: 0.5 });
     expect(net.sent).toEqual([]);
+  });
+
+  it('ignores a signed presence from its previous session but keeps a real player with the same name', async () => {
+    await joinActive();
+    const oldSession = new SignedRemote(0x51, 'lan:old-self', lan);
+    const oldProof = selfPresenceProof(MEMBER_TOKEN, KEYS.relayTopic, oldSession.peer)!;
+    oldSession.presence({ name: 'Me', selfProof: oldProof });
+    expect(room.state().members.map((member) => member.name)).toEqual(['Me']);
+
+    const namesake = new SignedRemote(0x52, 'lan:namesake', lan);
+    namesake.presence({ name: 'Me', selfProof: oldProof });
+    expect(room.state().members.map((member) => member.name)).toEqual(['Me', 'Me']);
+    expect(room.state().members[1].peer).toBe(namesake.peer);
+    expect(isSelfPresenceProof(MEMBER_TOKEN, KEYS.relayTopic, namesake.peer, oldProof)).toBe(false);
   });
 
   it('setInternetAllowed(true) mid-room starts it with the current keys and announces', async () => {

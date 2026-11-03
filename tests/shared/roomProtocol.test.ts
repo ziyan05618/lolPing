@@ -474,11 +474,17 @@ describe('message signatures', () => {
     for (const bad of [`${'B'.repeat(42)}=`, `${'B'.repeat(43)}!`, 7]) expect(validateMessage({ ...presence, pk: bad })).toEqual(presence);
   });
 
+  it('keeps a well-formed self proof on a presence and drops a malformed one', () => {
+    const selfProof = 'ab'.repeat(32);
+    expect(validateMessage({ ...presence, selfProof })).toEqual({ ...presence, selfProof });
+    expect(validateMessage({ ...presence, selfProof: 'not-a-proof' })).toEqual(presence);
+  });
+
   it('fits the largest signed presence in one packet', () => {
     const worst: PresenceMsg = {
       ...base, seq: Number.MAX_SAFE_INTEGER, t: 'presence', proto: 1, app: '9'.repeat(64), name: '😀'.repeat(16), color: 7,
       rgb: [255, 255, 255], status: 'paused', em: Array.from({ length: 9 }, (_, i) => String(i).repeat(32)),
-      nf: ['text', 'votes'], pk: `${'B'.repeat(43)}=`,
+      nf: ['text', 'votes'], pk: `${'B'.repeat(43)}=`, xk: `${'C'.repeat(43)}=`, selfProof: 'ab'.repeat(32),
     };
     const sealed = seal(Buffer.alloc(32), bytes(joinSigned(enc(worst), SIG)));
     expect(sealed.length).toBeLessThanOrEqual(MAX_PACKET);

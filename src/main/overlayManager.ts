@@ -410,8 +410,8 @@ export class OverlayManager extends EventEmitter {
     this.sharing = sharing;
   }
 
-  setWhisperMembers(members: readonly { peer: string; name: string; self?: boolean }[]): void {
-    const next = members.filter((m) => !m.self).map(({ peer, name }) => ({ peer, name })).slice(0, 15);
+  setWhisperMembers(members: readonly { peer: string; name: string }[]): void {
+    const next = members.map(({ peer, name }) => ({ peer, name })).slice(0, 15);
     this.whisperMembers = next;
     if (this.whisperTarget && !next.some((m) => m.peer === this.whisperTarget)) {
       this.whisperTarget = null;

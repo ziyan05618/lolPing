@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveRoomKeys, makeIdentity, MAX_PACKET, open, peerIdOf, publicKeyOf, publicWhisperKeyOf, seal, signBody, verifyBody,
-  whisperMessageKey, whisperSecret, whisperTopic,
+  isSelfPresenceProof, selfPresenceProof, whisperMessageKey, whisperSecret, whisperTopic,
 } from '../../src/main/roomCrypto';
 import { PEER_RE } from '../../src/shared/roomProtocol';
 
@@ -111,5 +111,23 @@ describe('pairwise whisper keys', () => {
     expect(whisperTopic(ac, peerIdOf(a.pk), peerIdOf(c.pk))).not.toBe(topicAB);
     const packet = seal(whisperMessageKey(ab), Buffer.from('private emote'));
     expect(open(whisperMessageKey(ac), packet)).toBeNull();
+  });
+});
+
+describe('self presence proofs', () => {
+  it('recognizes the same installation and session without exposing a reusable token', () => {
+    const token = 'ab'.repeat(16);
+    const proof = selfPresenceProof(token, 'room-a', '0123456789abcdef');
+    expect(proof).toMatch(/^[0-9a-f]{64}$/);
+    expect(selfPresenceProof(token, 'room-a', '0123456789abcdef')).toBe(proof);
+    expect(isSelfPresenceProof(token, 'room-a', '0123456789abcdef', proof!)).toBe(true);
+    expect(isSelfPresenceProof(token, 'room-b', '0123456789abcdef', proof!)).toBe(false);
+    expect(isSelfPresenceProof(token, 'room-a', 'fedcba9876543210', proof!)).toBe(false);
+    expect(proof).not.toBe(token);
+  });
+
+  it('rejects malformed member tokens', () => {
+    expect(selfPresenceProof('not-a-token', 'room-a', '0123456789abcdef')).toBeNull();
+    expect(isSelfPresenceProof('not-a-token', 'room-a', '0123456789abcdef', '00'.repeat(32))).toBe(false);
   });
 });
