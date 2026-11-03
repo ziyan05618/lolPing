@@ -27,6 +27,8 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .innerTxt { font: 600 8px "Segoe UI", sans-serif; fill: #fff0c8; pointer-events: none; }
 #emoteWheel.whisper .core { stroke: #d89b42; }
 #emoteWheel.whisper .innerTxt { fill: #ffd58c; }
+#wheel.whisper .core { stroke: #d89b42; }
+#wheel.whisper .innerTxt { fill: #ffd58c; }
 /* Emote art is square: draw it round, like the League emote wheel. It keeps its own colours (only ping icons are tinted
    until hovered), so the hot slice shows by its wedge and the larger icon. */
 #emoteWheel .icon, #emoteWheel .hub { clip-path: circle(50%); }
@@ -34,6 +36,7 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 /* The ask wheel is the ping wheel in the teammate's tag colour; a slice whose intent is off stays grey and faint. */
 #wheel.ask .core { stroke: var(--ask); }
 #wheel.ask .centerTxt { fill: var(--ask); font-size: 14px; letter-spacing: .3px; }
+#wheel.ask.whisper .core { stroke: #d89b42; }
 #wheel .icon.dim, #wheel .icon.dim.hot { filter: grayscale(1) brightness(.6); opacity: .45; }
 
 /* ---------- pings (sizes scale with --size, timing with --dur) ---------- */

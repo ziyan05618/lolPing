@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  isSelfPresenceProof, makeIdentity, open, peerIdOf, publicKeyOf, seal, selfPresenceProof, signBody, verifyBody, type RoomIdentity, type RoomKeys,
+  isSelfPresenceProof, makeIdentity, open, peerIdOf, publicKeyOf, publicWhisperKeyOf, seal, selfPresenceProof, signBody, verifyBody,
+  whisperMessageKey, whisperSecret, whisperTopic, type RoomIdentity, type RoomKeys,
 } from '../../src/main/roomCrypto';
 import {
   MAX_MEMBERS, RoomManager, type RemoteEmote, type RemotePing, type RemoteText, type RoomToast,
@@ -72,7 +73,15 @@ class SignedRemote extends Remote {
 }
 
 class FakeWhisperTransport extends FakeTransport {
-  broadcastOn(_topic: string, packet: Uint8Array): boolean {
+  published: { topic: string; packet: Uint8Array; type?: string }[] = [];
+  whisperTopics: string[] = [];
+
+  setWhisperTopics(topics: readonly string[]): void {
+    this.whisperTopics = [...topics];
+  }
+
+  broadcastOn(topic: string, packet: Uint8Array, type?: string): boolean {
+    this.published.push({ topic, packet, ...(type ? { type } : {}) });
     this.sent.push({ to: '*', packet });
     return true;
   }
@@ -741,6 +750,100 @@ describe('internet over a shared transport', () => {
     manager.quit();
   });
 
+  it('sends private pings only on the pairwise topic and counts them against ping quota', async () => {
+    const relay = new FakeWhisperTransport('internet');
+    const policy: RoomPolicyService = {
+      token: () => undefined, saveToken: () => undefined, claim: async () => false,
+      read: async () => ({ claimed: true, limits: { emote_per_minute: 20, ping_per_second: 1, text_per_minute: 10 } }),
+      write: async () => ({ ok: true }),
+    };
+    const manager = new RoomManager({
+      transports: [relay], now: () => Date.now(), randomBytes: (n) => new Uint8Array(n).fill(0xef),
+      deriveKeys: async () => KEYS, appVersion: '0.6.4', profile: () => profile,
+      resolveTarget: () => ({ displayId: 1, width: 100, height: 100 }), announceEmotes: () => [], policy,
+    });
+    const cooldowns: { type: string; retryAfterMs: number }[] = [];
+    manager.on('policyCooldown', (value) => cooldowns.push(value));
+    await manager.join(CODE);
+    await vi.advanceTimersByTimeAsync(3000);
+    const recipient = new SignedRemote(0x63, 'net:recipient', relay);
+    relay.deliver(recipient.key, recipient.packet({
+      t: 'presence', proto: 1, app: '0.6.4', name: 'Ben', color: 2, status: 'on',
+    }), undefined, KEYS.relayTopic);
+    relay.published = [];
+
+    expect(manager.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, recipient.peer)).toBe(true);
+    expect(manager.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, recipient.peer)).toBe(false);
+    expect(relay.published).toHaveLength(1);
+    expect(relay.published[0].topic).not.toBe(KEYS.relayTopic);
+    expect(relay.published[0].type).toBe('ping');
+    expect(relay.whisperTopics).toContain(relay.published[0].topic);
+    expect(cooldowns).toHaveLength(1);
+    expect(cooldowns[0].type).toBe('ping');
+    expect(cooldowns[0].retryAfterMs).toBeGreaterThan(0);
+    manager.quit();
+  });
+
+  it('reports when a member without a whisper channel cannot receive a private ping', async () => {
+    const relay = new FakeWhisperTransport('internet');
+    const manager = make([relay]);
+    await manager.join(CODE);
+    await vi.advanceTimersByTimeAsync(3000);
+    const oldPeer = new Remote('4444444444444444', 'net:old', relay);
+    relay.deliver(oldPeer.key, oldPeer.packet({
+      t: 'presence', proto: 1, app: '0.4.0', name: 'Old', color: 2, status: 'on',
+    }), undefined, KEYS.relayTopic);
+    const unavailable = vi.fn();
+    manager.on('whisperUnavailable', unavailable);
+
+    expect(manager.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, oldPeer.peer)).toBe(false);
+    expect(relay.published).toHaveLength(0);
+    expect(unavailable).toHaveBeenCalledOnce();
+    manager.quit();
+  });
+
+  it('accepts a private ping only for this member and from its paired peer', async () => {
+    const relay = new FakeWhisperTransport('internet');
+    const manager = make([relay]);
+    const received: RemotePing[] = [];
+    manager.on('remotePing', (p: RemotePing) => received.push(p));
+    await manager.join(CODE);
+    await vi.advanceTimersByTimeAsync(3000);
+    const a = new SignedRemote(0x65, 'net:a', relay);
+    const b = new SignedRemote(0x66, 'net:b', relay);
+    for (const remote of [a, b]) {
+      relay.deliver(remote.key, remote.packet({
+        t: 'presence', proto: 1, app: '0.6.4', name: `P${remote.peer[0]}`, color: 2, status: 'on',
+      }), undefined, KEYS.relayTopic);
+    }
+    const ownPresence = relay.sent
+      .map(({ packet }) => decodeMessage(open(KEYS.msgKey, packet)!))
+      .find((message) => message?.t === 'presence' && message.peer === manager.self);
+    if (!ownPresence || ownPresence.t !== 'presence' || !ownPresence.xk) throw new Error('our signed presence was missing');
+    const ownXpk = publicWhisperKeyOf(Buffer.from(ownPresence.xk, 'base64'));
+    if (!ownXpk) throw new Error('our whisper public key was invalid');
+
+    const fromBSecret = whisperSecret(b.id.xkey, ownXpk);
+    const fromBTopic = whisperTopic(fromBSecret, manager.self, b.peer);
+    relay.deliver('net:forged', a.packet({
+      t: 'ping', ping: 'danger', d: 1, x: 0.2, y: 0.3, to: manager.self,
+    }, whisperMessageKey(fromBSecret)), 'ping', fromBTopic);
+    expect(received).toHaveLength(0);
+
+    const fromASecret = whisperSecret(a.id.xkey, ownXpk);
+    const fromATopic = whisperTopic(fromASecret, manager.self, a.peer);
+    relay.deliver(a.key, a.packet({
+      t: 'ping', ping: 'danger', d: 1, x: 0.2, y: 0.3, to: b.peer,
+    }, whisperMessageKey(fromASecret)), 'ping', fromATopic);
+    expect(received).toHaveLength(0);
+
+    relay.deliver(a.key, a.packet({
+      t: 'ping', ping: 'danger', d: 1, x: 0.2, y: 0.3, to: manager.self,
+    }, whisperMessageKey(fromASecret)), 'ping', fromATopic);
+    expect(received).toHaveLength(1);
+    manager.quit();
+  });
+
   it('caps pings over a shared transport at 5/s with bursts of 10, while LAN members still get every ping', async () => {
     await joinNow();
     new Remote('1111111111111111', 'lan:a', lan).presence();
@@ -1062,6 +1165,16 @@ describe('RoomManager room policy', () => {
     for (let i = 0; i < 10; i++) a.text();
     a.alive();
     expect(texts).toHaveLength(10);
+  });
+
+  it('drops a room-topic ping that claims a private recipient', async () => {
+    await joinActive();
+    const a = new SignedRemote(0x64, 'lan:a', lan);
+    a.presence();
+    a.ping({ to: room.self });
+    expect(pings).toHaveLength(0);
+    a.ping();
+    expect(pings).toHaveLength(1);
   });
 
   it('counts duplicate packets once before checking the quota on another route', async () => {

@@ -157,7 +157,8 @@ interface WhisperChannel {
  * The room: who is in it, what we send, and what we let through. Talks to the network only through transports,
  * which carry sealed packets. Events: 'state' (RoomStateCore), 'remotePing' (RemotePing), 'remoteEmote' (RemoteEmote), 'toast' (RoomToast),
  * 'remoteText' (RemoteText: text and alive lines), 'vote' (VoteMsg), 'ballot' (BallotMsg), 'saveCode' (canonical code | null: what "rejoin last room" should remember), 'emotes' (peer, announced hashes),
- * 'want' (WantMsg), 'chunk' (ChunkMsg) and 'memberGone' (peer), which EmoteTransfer answers.
+ * 'want' (WantMsg), 'chunk' (ChunkMsg), 'memberGone' (peer), which EmoteTransfer answers, and 'whisperUnavailable'
+ * when a private send cannot use the target's pairwise channel.
  */
 export class RoomManager extends EventEmitter {
   /**
@@ -265,14 +266,15 @@ export class RoomManager extends EventEmitter {
     if (this.phase !== 'idle') this.stop();
   }
 
-  sendPing(ping: PingId, shared: { d: number; x: number; y: number }): boolean {
-    return this.sendShared({ t: 'ping', ping, ...shared });
+  sendPing(ping: PingId, shared: { d: number; x: number; y: number }, to?: string): boolean {
+    const body = { t: 'ping', ping, ...shared };
+    return to ? this.sendWhisper('ping', to, { ...body, to }) : this.sendShared(body);
   }
 
   /** `fx` is the effect stored on the emote's entry here; absent (the plain pop) leaves the field out for the older peers. */
   sendEmote(e: EmoteRef, shared: { d: number; x: number; y: number }, fx?: number, to?: string): boolean {
     const body = { t: 'emote', e, ...shared, ...(fx !== undefined ? { fx } : {}) };
-    return to ? this.sendWhisperEmote(to, { ...body, to }) : this.sendShared(body);
+    return to ? this.sendWhisper('emote', to, { ...body, to }) : this.sendShared(body);
   }
 
   sendText(text: string, shared: { d: number; x: number; y: number }): boolean {
@@ -327,15 +329,21 @@ export class RoomManager extends EventEmitter {
     return true;
   }
 
-  private sendWhisperEmote(to: string, body: Record<string, unknown>): boolean {
-    if (this.phase === 'idle' || !this.keys || this.paused || !this.members.has(to)) return false;
+  private sendWhisper(type: 'ping' | 'emote', to: string, body: Record<string, unknown>): boolean {
+    if (this.phase === 'idle' || !this.keys || this.paused) return false;
+    const unavailable = (): false => {
+      this.emit('whisperUnavailable');
+      return false;
+    };
+    if (!this.members.has(to)) return unavailable();
     const entry = [...this.whisperChannels].find(([, value]) => value.peer === to);
     const target = this.members.get(to);
     const internetPath = target?.paths.internet;
     const relay = [...this.active].find((t) => t.kind === 'internet' && t.shared && t.broadcastOn);
-    if (!entry || !internetPath || this.deps.now() - internetPath.seenAt >= ALIVE_MS.internet || !relay?.broadcastOn) return false;
+    if (!entry || !internetPath || this.deps.now() - internetPath.seenAt >= ALIVE_MS.internet || !relay?.broadcastOn) {
+      return unavailable();
+    }
     const [topic, channel] = entry;
-    const type: RoomEventType = 'emote';
     const decision = this.allowPolicy(this.identity.pk.toString('base64'), type);
     if (!decision.allowed) {
       this.emit('policyCooldown', { type, retryAfterMs: decision.retryAfterMs } satisfies PolicyCooldown);
@@ -343,10 +351,10 @@ export class RoomManager extends EventEmitter {
     }
     try {
       const packet = this.sealWith(whisperMessageKey(channel.key), body);
-      if (!this.relayCap.allow(relay.kind, RELAY_PING_RATE, RELAY_PING_BURST)) return false;
-      return relay.broadcastOn(topic, packet, type);
+      if (!this.relayCap.allow(relay.kind, RELAY_PING_RATE, RELAY_PING_BURST)) return unavailable();
+      return relay.broadcastOn(topic, packet, type) || unavailable();
     } catch {
-      return false;
+      return unavailable();
     }
   }
 
@@ -756,8 +764,8 @@ export class RoomManager extends EventEmitter {
     }
     if (!m) return;
     if (privateChannel) {
-      if (msg.t !== 'emote' || msg.to !== this.self || msg.peer !== privateChannel.peer) return;
-    } else if (msg.t === 'emote' && msg.to !== undefined) {
+      if ((msg.t !== 'emote' && msg.t !== 'ping') || msg.to !== this.self || msg.peer !== privateChannel.peer) return;
+    } else if ((msg.t === 'emote' || msg.t === 'ping') && msg.to !== undefined) {
       return;
     }
     this.heard(m, t, key);

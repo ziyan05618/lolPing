@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parkedBounds } from '../../src/main/overlayManager';
 import type { EmoteArt } from '../../src/shared/emotes';
-import { OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, OVERLAY_WHISPER_SELECT } from '../../src/shared/ipc';
+import {
+  OVERLAY_EMOTED, OVERLAY_IDLE, OVERLAY_PINGED, OVERLAY_WHISPER_HOVER, OVERLAY_WHISPER_SELECT,
+} from '../../src/shared/ipc';
 import { DEFAULT_SETTINGS, overlaySettings } from '../../src/shared/settings';
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -445,6 +447,34 @@ describe('OverlayManager emote reports from the overlay', () => {
     mgr.on('shared', shared);
     h.handlers.get(OVERLAY_PINGED)!({ sender: sender(0) }, { id: 'danger', x: 1, y: 2 });
     expect(shared).toHaveBeenCalledWith({ id: 'danger', displayId: 1, x: 1, y: 2 });
+  });
+
+  it('uses the same locked whisper target for pings and emotes', () => {
+    const ping = vi.fn(() => true);
+    const emote = vi.fn(() => true);
+    mgr.setSharing({ ping, emote });
+    mgr.setWhisperMembers([{ peer: '1234567890abcdef', name: 'Alex' }]);
+    h.handlers.get(OVERLAY_WHISPER_HOVER)!({ sender: sender(0) }, 0);
+    mgr.toggleWhisperLock();
+
+    h.handlers.get(OVERLAY_PINGED)!({ sender: sender(0) }, { id: 'danger', x: 10, y: 20 });
+    h.handlers.get(OVERLAY_EMOTED)!({ sender: sender(0) }, { ref: 'gg', x: 30, y: 40 });
+
+    expect(ping).toHaveBeenCalledWith({ id: 'danger', displayId: 1, x: 10, y: 20, to: '1234567890abcdef' });
+    expect(emote).toHaveBeenCalledWith({ ref: 'gg', displayId: 1, x: 30, y: 40, to: '1234567890abcdef' });
+  });
+
+  it('does not draw a private ping locally when sharing rejects it', () => {
+    mgr.setSharing({ ping: () => false, emote: () => true });
+    mgr.setWhisperMembers([{ peer: '1234567890abcdef', name: 'Alex' }]);
+    h.handlers.get(OVERLAY_WHISPER_HOVER)!({ sender: sender(0) }, 0);
+    mgr.toggleWhisperLock();
+    for (const win of h.windows) win.webContents.send.mockClear();
+
+    h.handlers.get(OVERLAY_PINGED)!({ sender: sender(0) }, { id: 'danger', x: 10, y: 20 });
+
+    expect(sent(0)).toEqual([]);
+    expect(sent(1)).toEqual([]);
   });
 });
 

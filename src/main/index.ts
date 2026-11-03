@@ -491,10 +491,11 @@ function start(): void {
     const template = text().cooldown[p.type];
     overlays.showPolicyCooldown({ ...p, template });
   });
+  room.on('whisperUnavailable', () => overlays.toast(text().whisper.unavailableTitle, text().whisper.unavailableBody));
   overlays.setSharing({
     ping: (p: SharedPing) => {
       const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
-      return shared !== null && room.sendPing(p.id, shared);
+      return shared !== null && room.sendPing(p.id, shared, p.to);
     },
     emote: (p: SharedEmote) => {
       const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);

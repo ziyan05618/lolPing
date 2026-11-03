@@ -392,15 +392,17 @@ The sender applies the same check before publishing and before local display. Ex
 relay pacing still apply. Updated clients enforce policy cooperatively; older apps keep their existing local
 behavior and cannot be forced to hide their own placements by a relay.
 
-### Private emotes
+### Private messages
 
-The emote wheel's inner ring lists members with a signed presence that proves an X25519 public key. Main resolves a
-selected roster index against its current authenticated membership list; renderer IPC never supplies a recipient ID.
-The two members derive an ephemeral pairwise secret for this room session, then use it to derive both an AES message
-key and an opaque relay topic. The message is encrypted with that pairwise key and published only on that topic.
-Both participants subscribe; other room members do not. A room-topic emote carrying `to` is rejected. Private sends
-use the sender's normal emote quota and never fall back to the room topic. Older clients do not announce an X25519
-key and are not offered as whisper targets.
+The ping and emote wheels' inner rings list members with a signed presence that proves an X25519 public key. Main
+resolves a selected roster index against its current authenticated membership list; renderer IPC never supplies a
+recipient ID. The two members derive an ephemeral pairwise secret for this room session, then use it to derive both
+an AES message key and an opaque relay topic. A private ping or emote is encrypted with that pairwise key and
+published only on that topic. Both participants subscribe; other room members do not. A room-topic ping or emote
+carrying `to` is rejected, and a private message is accepted only on its pairwise topic from the paired member and
+when it names the local peer as its recipient. Private sends use the sender's normal ping or emote quota and never
+fall back to the room topic. Older clients do not announce an X25519 key and are not offered as whisper targets;
+when a target loses its private channel, the send fails visibly without drawing a local ping or emote.
 
 Each joined room can have at most 15 pairwise subscriptions per client, alongside its room subscription. The relay
 subscription cap is 64. The inner ring's hover is reported to main as a roster index; the `~` key is captured only
@@ -419,9 +421,9 @@ token over HTTPS. It can see request IPs, but public JSON responses contain neit
 message content, name or room signing key is sent to the policy service. The two READMEs and Room settings
 describe these network and metadata changes.
 
-Private emotes are encrypted with a pairwise key and use a pairwise-derived topic, never the shared room topic.
-Relays still see the event type and opaque topic. Other room members do not subscribe to that topic, and an old
-client without the new signed key announcement is not eligible for private emotes.
+Private pings and emotes are encrypted with a pairwise key and use a pairwise-derived topic, never the shared room
+topic. Relays still see the event type and opaque topic. Other room members do not subscribe to that topic, and an
+old client without the new signed key announcement is not eligible for private messages.
 
 ## 13. Emotes (v0.5.0)
 

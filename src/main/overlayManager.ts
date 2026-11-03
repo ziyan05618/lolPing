@@ -22,6 +22,7 @@ export interface SharedPing {
   displayId: number;
   x: number;
   y: number;
+  to?: string;
 }
 
 /** An emote the user just placed, in overlay-local CSS px: the room shares these. */
@@ -397,7 +398,8 @@ export class OverlayManager extends EventEmitter {
 
   /** Our own ping placed from here, kept if that setting is on, and shared with the room. */
   private placeOwnPing(id: PingId, p: LocalPoint): void {
-    const shared: SharedPing = { id, displayId: p.displayId, x: p.x, y: p.y };
+    const target = this.whisperTarget ?? undefined;
+    const shared: SharedPing = { id, displayId: p.displayId, x: p.x, y: p.y, ...(target ? { to: target } : {}) };
     if (this.sharing && !this.sharing.ping(shared)) return;
     const keep = this.settings.keepLastPing ? { keep: true } : {};
     this.send(p.displayId, 'ping:spawn', { id, x: p.x, y: p.y, ...keep });

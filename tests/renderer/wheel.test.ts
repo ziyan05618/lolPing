@@ -120,6 +120,26 @@ describe('wheel centre', () => {
   });
 });
 
+describe('wheel inner ring', () => {
+  it('reports the hovered member and returns that member when selected', () => {
+    const svg = new FakeElement();
+    svg.id = 'wheel';
+    const hover = vi.fn();
+    const innerHover = vi.fn();
+    const wheel = new Wheel(svg as unknown as SVGSVGElement, 'WHEEL', 'icon.png', hover, innerHover);
+    wheel.setItems(Array.from({ length: 8 }, (_, i) => ({ key: String(i), icon: `${i}.png` })));
+    wheel.setInnerItems([{ key: '1234567890abcdef', icon: '', label: 'Alex' }]);
+    const radius = (28 + WHEEL.innerR) / 2;
+
+    wheel.open(800, 500);
+    wheel.move(800, 500 - radius);
+    expect(innerHover).toHaveBeenLastCalledWith(0);
+    expect(wheel.release(800, 500 - radius)).toEqual({ key: '1234567890abcdef', x: 800, y: 500, inner: true });
+    expect(innerHover).toHaveBeenLastCalledWith(-1);
+    expect(hover).not.toHaveBeenCalled();
+  });
+});
+
 describe('wheel labels', () => {
   const centre = (svg: FakeElement): string =>
     svg.children.find((c) => c.attrs.get('class') === 'centerTxt')?.textContent ?? '';

@@ -73,6 +73,8 @@ export interface PingMsg extends Base {
   /** Position as a fraction of that display, 0–1. */
   x: number;
   y: number;
+  /** Pairwise recipient. Such a message is only published on the derived whisper topic. */
+  to?: string;
 }
 /** Added in 0.5.0: older apps drop it as an unknown type. Position as in PingMsg. */
 export interface EmoteMsg extends Base {
@@ -218,10 +220,11 @@ export function validateMessage(raw: unknown): RoomMessage | null {
       return isTagRgb(rgb) ? { ...presence, rgb } : presence;
     }
     case 'ping': {
-      const { ping, d, x, y } = raw;
+      const { ping, d, x, y, to } = raw;
       if (!isPingId(ping) || !Number.isInteger(d) || (d as number) < 1 || (d as number) > MAX_DISPLAY) return null;
       if (!isUnit(x) || !isUnit(y)) return null;
-      return { t, ...base, ping, d: d as number, x, y };
+      if (to !== undefined && (typeof to !== 'string' || !PEER_RE.test(to))) return null;
+      return { t, ...base, ping, d: d as number, x, y, ...(to === undefined ? {} : { to }) };
     }
     case 'emote': {
       const { e, fx, d, x, y, to } = raw;

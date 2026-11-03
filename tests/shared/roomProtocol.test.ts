@@ -13,6 +13,7 @@ import {
 const base = { peer: '0123456789abcdef', seq: 4, ts: 1_780_000_000_000 };
 const presence: PresenceMsg = { ...base, t: 'presence', proto: 1, app: '0.3.0', name: 'Alex', color: 3, status: 'on', em: [], nf: [] };
 const ping: PingMsg = { ...base, t: 'ping', ping: 'danger', d: 2, x: 0.25, y: 1 };
+const privatePing: PingMsg = { ...ping, to: 'fedcba9876543210' };
 const emote: EmoteMsg = { ...base, t: 'emote', e: 'gg', d: 2, x: 0.25, y: 1 };
 const text: TextMsg = { ...base, t: 'text', text: 'Group mid', d: 2, x: 0.25, y: 1 };
 const CUSTOM_REF = `c:${'0123456789abcdef'.repeat(2)}`;
@@ -27,12 +28,17 @@ describe('encode / decode', () => {
     expect(taggedRoomEventType([['t', 'ping']])).toBe('ping');
     expect(taggedRoomEventType([['t', 'emote']])).toBe('emote');
   });
-  it.each<RoomMessage>([presence, ping, emote, text, { ...base, t: 'bye' }])('round-trips $t', (m) => {
+  it.each<RoomMessage>([presence, ping, privatePing, emote, text, { ...base, t: 'bye' }])('round-trips $t', (m) => {
     expect(decodeMessage(encodeMessage(m))).toEqual(m);
   });
 
   it('rounds x and y to 4 decimals', () => {
     expect(decodeMessage(encodeMessage({ ...ping, x: 0.123456, y: 0.987654 }))).toMatchObject({ x: 0.1235, y: 0.9877 });
+  });
+
+  it('validates a private ping recipient as a peer id', () => {
+    expect(validateMessage({ ...privatePing, to: 'not-a-peer' })).toBeNull();
+    expect(validateMessage({ ...privatePing, extra: 'ignored' })).toEqual(privatePing);
   });
 
   it('rounds an emote’s x and y to 4 decimals too', () => {

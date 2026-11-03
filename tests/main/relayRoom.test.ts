@@ -65,9 +65,11 @@ describe('rooms over a relay', () => {
     let shownAtB = 0;
     let shownAtC = 0;
     const pingsAtB: unknown[] = [];
+    const pingsAtC: unknown[] = [];
     b.room.on('remoteEmote', () => shownAtB++);
     c.room.on('remoteEmote', () => shownAtC++);
     b.room.on('remotePing', (p: unknown) => pingsAtB.push(p));
+    c.room.on('remotePing', (p: unknown) => pingsAtC.push(p));
 
     await a.room.join(CODE);
     await b.room.join(CODE);
@@ -92,12 +94,24 @@ describe('rooms over a relay', () => {
     expect(open(keys.msgKey, Buffer.from(privateEvent.content, 'base64'))).toBeNull();
     expect(relay.subscriptionsByConnection().filter((topics) => topics.includes(privateTopic))).toHaveLength(2);
 
+    expect(a.room.sendPing('danger', { d: 1, x: 0.4, y: 0.6 }, recipient)).toBe(true);
+    await until(() => pingsAtB.length === 1);
+    expect(pingsAtC).toHaveLength(0);
+    const privatePingEvent = relay.publishedEvents().find((e) => e.tags.some((t) => t[0] === 't' && t[1] === 'ping'));
+    expect(privatePingEvent).toBeDefined();
+    if (!privatePingEvent) throw new Error('private ping event was not published');
+    const privatePingTopic = privatePingEvent.tags.find((t) => t[0] === 'x')?.[1];
+    if (!privatePingTopic) throw new Error('private ping topic tag was missing');
+    expect(privatePingTopic).not.toBe(keys.relayTopic);
+    expect(open(keys.msgKey, Buffer.from(privatePingEvent.content, 'base64'))).toBeNull();
+    expect(relay.subscriptionsByConnection().filter((topics) => topics.includes(privatePingTopic))).toHaveLength(2);
+
     const copiedToRoom = signEvent(
       makeKeyPair(), ROOM_EVENT_KIND, roomEventTags(keys.relayTopic, 'emote'), privateEvent.content, Math.floor(Date.now() / 1000),
     );
     relay.inject(copiedToRoom);
     a.room.sendPing('omw', { d: 1, x: 0.5, y: 0.5 });
-    await until(() => pingsAtB.length === 1);
+    await until(() => pingsAtB.length === 2 && pingsAtC.length === 1);
     expect(shownAtB).toBe(1);
     expect(shownAtC).toBe(0);
   }, 20_000);
