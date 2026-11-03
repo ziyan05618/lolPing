@@ -32,7 +32,13 @@ export interface OverlayEvents {
   'wheel:move': Point & { wheel?: WheelKind };
   'wheel:release': Point & { wheel?: WheelKind };
   'wheel:cancel': null;
-  'whisper:state': { members: { peer: string; name: string }[]; target: string | null; locked: boolean; label: string | null };
+  'whisper:state': {
+    members: { peer: string; name: string }[];
+    everyone: string;
+    target: string | null;
+    locked: boolean;
+    label: string | null;
+  };
   'policy:cooldown': { type: 'ping' | 'emote' | 'text'; retryAfterMs: number; template: string };
   /** `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one. */
   'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean } & MateMark;

@@ -114,8 +114,9 @@ export class OverlayManager extends EventEmitter {
   private whisperMembers: { peer: string; name: string }[] = [];
   private whisperTarget: string | null = null;
   private whisperHover: string | null = null;
+  private whisperEveryoneHovered = false;
   private whisperLocked = false;
-  private whisperCopy: { prefix(name: string): string; locked(name: string): string } | null = null;
+  private whisperCopy: { everyone: string; prefix(name: string): string; locked(name: string): string } | null = null;
   /** Overlays whose page last said it has nothing on it, parked off their displays (Windows only). */
   private readonly idleWindows = new WeakSet<BrowserWindow>();
 
@@ -145,18 +146,33 @@ export class OverlayManager extends EventEmitter {
     });
     ipcMain.on(OVERLAY_WHISPER_HOVER, (event, raw: unknown) => {
       if (this.displayOf(event.sender) === undefined) return;
-      const index = Number.isInteger(raw) ? raw as number : -1;
-      this.whisperHover = index >= 0 && index < this.whisperMembers.length ? this.whisperMembers[index].peer : null;
-      this.emit('whisperHover', this.whisperHover !== null);
+      const index = Number.isInteger(raw) ? raw as number : null;
+      this.whisperEveryoneHovered = index === -1;
+      this.whisperHover = index !== null && index >= 0 && index < this.whisperMembers.length
+        ? this.whisperMembers[index].peer
+        : null;
+      this.notifyWhisperHover();
     });
     ipcMain.on(OVERLAY_WHISPER_SELECT, (event, raw: unknown) => {
       if (this.displayOf(event.sender) === undefined) return;
       if (!Number.isInteger(raw)) return;
+      if (raw === -1) {
+        this.whisperTarget = null;
+        this.whisperLocked = false;
+        this.whisperEveryoneHovered = false;
+        this.whisperHover = null;
+        this.broadcastWhisperState();
+        this.notifyWhisperHover();
+        return;
+      }
       const member = this.whisperMembers[raw as number];
       if (!member) return;
       this.whisperTarget = member.peer;
       this.whisperLocked = false;
+      this.whisperEveryoneHovered = false;
+      this.whisperHover = null;
       this.broadcastWhisperState();
+      this.notifyWhisperHover();
     });
     ipcMain.on(OVERLAY_IDLE, (event, idle: unknown) => {
       // Screenshot tools on Windows take a shown overlay for a window over the whole display (#127): park an empty one.
@@ -424,15 +440,25 @@ export class OverlayManager extends EventEmitter {
       this.whisperHover = null;
       this.emit('whisperHover', false);
     }
+    if (this.whisperEveryoneHovered) this.notifyWhisperHover();
     this.broadcastWhisperState();
   }
 
-  setWhisperCopy(copy: { prefix(name: string): string; locked(name: string): string }): void {
+  setWhisperCopy(copy: { everyone: string; prefix(name: string): string; locked(name: string): string }): void {
     this.whisperCopy = copy;
     this.broadcastWhisperState();
   }
 
   toggleWhisperLock(): void {
+    if (this.whisperEveryoneHovered) {
+      if (this.whisperTarget !== null || this.whisperLocked) {
+        this.whisperTarget = null;
+        this.whisperLocked = false;
+        this.broadcastWhisperState();
+        this.notifyWhisperHover();
+      }
+      return;
+    }
     const target = this.whisperHover;
     if (!target || !this.whisperMembers.some((m) => m.peer === target)) return;
     if (this.whisperLocked && this.whisperTarget === target) {
@@ -445,13 +471,20 @@ export class OverlayManager extends EventEmitter {
     this.broadcastWhisperState();
   }
 
+  private notifyWhisperHover(): void {
+    const memberHovered = this.whisperHover !== null;
+    const targetCanBeUnlocked = this.whisperEveryoneHovered && this.whisperTarget !== null;
+    this.emit('whisperHover', memberHovered || targetCanBeUnlocked);
+  }
+
   private broadcastWhisperState(): void {
     const name = this.whisperMembers.find((m) => m.peer === this.whisperTarget)?.name;
     const label = name && this.whisperCopy
       ? (this.whisperLocked ? this.whisperCopy.locked(name) : this.whisperCopy.prefix(name))
       : null;
     for (const id of this.windows.keys()) this.send(id, 'whisper:state', {
-      members: this.whisperMembers, target: this.whisperTarget, locked: this.whisperLocked, label,
+      members: this.whisperMembers, everyone: this.whisperCopy?.everyone ?? '',
+      target: this.whisperTarget, locked: this.whisperLocked, label,
     });
   }
 

@@ -624,6 +624,7 @@ const en = {
     text: 'Text cooldown {n}s',
   },
   whisper: {
+    everyone: 'Everyone',
     prefix: (name: string) => `Private · ${name}`,
     locked: (name: string) => `🔒 ${name}`,
     targetLeft: 'Private message target left the room.',
@@ -1071,6 +1072,7 @@ const zh: Strings = {
     text: '文字冷却 {n}s',
   },
   whisper: {
+    everyone: '全队',
     prefix: (name) => `私聊 · ${name}`,
     locked: (name) => `🔒 ${name}`,
     targetLeft: '私聊对象已离开房间。',

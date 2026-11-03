@@ -51,16 +51,28 @@ const tick = (): void => {
   if (settings.tickSound) sounds.play(TICK_SOUND, volume() * 0.5);
 };
 const centers = centerIcons(settings);
-// The ask wheel is the ping wheel dressed in the teammate's colour, with each slice's intent label on hover.
-const pingWheel = new Wheel(pingSvg, 'PING', centers.ping, tick, (slice) => {
-  window.overlay.reportWhisperHover(slice >= 0 && whisperMembers[slice] ? slice : null);
-});
-const emoteWheel = new Wheel(emoteSvg, 'EMOTE', centers.emote, tick, (slice) => {
-  window.overlay.reportWhisperHover(slice >= 0 && whisperMembers[slice] ? slice : null);
-});
 let whisperMembers: { peer: string; name: string }[] = [];
+let whisperEveryone = '';
 let whisperTarget: string | null = null;
 let whisperLabel: string | null = null;
+
+function whisperRingItems(): { key: string; icon: string; label: string }[] {
+  return whisperMembers.length
+    ? [
+      { key: '', icon: '', label: whisperEveryone },
+      ...whisperMembers.map((m) => ({ key: m.peer, icon: '', label: m.name })),
+    ]
+    : [];
+}
+
+function reportWhisperHover(slice: number): void {
+  const index = slice === 0 ? -1 : slice > 0 && whisperMembers[slice - 1] ? slice - 1 : null;
+  window.overlay.reportWhisperHover(index);
+}
+
+// The ask wheel is the ping wheel dressed in the teammate's colour, with each slice's intent label on hover.
+const pingWheel = new Wheel(pingSvg, 'PING', centers.ping, tick, reportWhisperHover);
+const emoteWheel = new Wheel(emoteSvg, 'EMOTE', centers.emote, tick, reportWhisperHover);
 
 /** Our newest ping on this display while "Keep my last ping on screen" is on. */
 let keptPing: HTMLElement | null = null;
@@ -78,8 +90,8 @@ function applySettings(s: OverlaySettings): void {
   emoteWheel.setSize(s.wheelSizePx);
   pingWheel.setItems(pingsFor(s.wheel).map(pingItem));
   emoteWheel.setItems(s.emoteWheel.map((ref) => emoteItem(ref, s.customEmotes)));
-  pingWheel.setInnerItems(whisperMembers.map((m) => ({ key: m.peer, icon: '', label: m.name })));
-  emoteWheel.setInnerItems(whisperMembers.map((m) => ({ key: m.peer, icon: '', label: m.name })));
+  pingWheel.setInnerItems(whisperRingItems());
+  emoteWheel.setInnerItems(whisperRingItems());
   pingWheel.setCenterLabel(whisperLabel);
   emoteWheel.setCenterLabel(whisperLabel);
   pingSvg.classList.toggle('whisper', whisperTarget !== null);
@@ -146,10 +158,11 @@ const wheelOf = (p: { wheel?: WheelKind }): Wheel => (p.wheel === 'emote' ? emot
 window.overlay.on('overlay:settings', applySettings);
 window.overlay.on('whisper:state', (s) => {
   whisperMembers = s.members;
+  whisperEveryone = s.everyone;
   whisperTarget = s.target;
   whisperLabel = s.label;
-  pingWheel.setInnerItems(whisperMembers.map((m) => ({ key: m.peer, icon: '', label: m.name })));
-  emoteWheel.setInnerItems(whisperMembers.map((m) => ({ key: m.peer, icon: '', label: m.name })));
+  pingWheel.setInnerItems(whisperRingItems());
+  emoteWheel.setInnerItems(whisperRingItems());
   pingSvg.classList.toggle('whisper', whisperTarget !== null);
   emoteSvg.classList.toggle('whisper', whisperTarget !== null);
   pingWheel.setCenterLabel(whisperLabel);
@@ -164,7 +177,11 @@ window.overlay.on('wheel:release', (p) => {
   const chosen = wheelOf(p).release(p.x, p.y);
   if (!chosen) return;
   if (chosen.inner) {
-    window.overlay.selectWhisper(whisperMembers.findIndex((m) => m.peer === chosen.key));
+    if (chosen.key === '') window.overlay.selectWhisper(-1);
+    else {
+      const index = whisperMembers.findIndex((m) => m.peer === chosen.key);
+      if (index >= 0) window.overlay.selectWhisper(index);
+    }
   } else if (p.wheel === 'emote') {
     window.overlay.reportEmote(chosen.key, chosen.x, chosen.y);
   } else if (p.wheel === 'ask') {

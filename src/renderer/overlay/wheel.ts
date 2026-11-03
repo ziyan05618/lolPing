@@ -2,6 +2,9 @@ import { WHEEL, pickSlice } from '../../shared/geometry';
 import { WHEEL_SLOTS } from '../../shared/pings';
 
 const NS = 'http://www.w3.org/2000/svg';
+const INNER_RING_START_R = 28;
+const MAX_INNER_ITEMS = 16;
+const INNER_LABEL_MAX = 5;
 
 function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>, parent: Element): SVGElementTagNameMap[K] {
   const e = document.createElementNS(NS, tag);
@@ -11,6 +14,11 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
 }
 
 const polar = (r: number, deg: number): [number, number] => [r * Math.cos((deg * Math.PI) / 180), r * Math.sin((deg * Math.PI) / 180)];
+
+const fitInnerLabel = (text: string): string => {
+  const chars = [...text];
+  return chars.length > INNER_LABEL_MAX ? `${chars.slice(0, INNER_LABEL_MAX).join('')}…` : text;
+};
 
 function sector(r0: number, r1: number, a0: number, a1: number): string {
   const [x0, y0] = polar(r0, a0);
@@ -93,14 +101,28 @@ export class Wheel {
   }
 
   setInnerItems(items: readonly WheelItem[]): void {
-    this.innerItems = items.slice(0, 15);
+    this.innerItems = items.slice(0, MAX_INNER_ITEMS);
+    const step = 360 / Math.max(this.innerItems.length, 1);
     this.innerLabels.forEach((label, i) => {
       const item = this.innerItems[i];
-      label.textContent = item?.label ?? '';
+      label.textContent = item ? fitInnerLabel(item.label ?? '') : '';
       label.style.display = item ? '' : 'none';
+      if (item) {
+        const mid = -90 + i * step;
+        const [x, y] = polar((INNER_RING_START_R + WHEEL.innerR - 2) / 2, mid);
+        label.setAttribute('x', String(x));
+        label.setAttribute('y', String(y + 4));
+      }
     });
     this.innerWedges.forEach((wedge, i) => {
-      wedge.style.display = this.innerItems[i] ? '' : 'none';
+      const item = this.innerItems[i];
+      wedge.style.display = item ? '' : 'none';
+      if (item) {
+        const mid = -90 + i * step;
+        wedge.setAttribute('d', sector(
+          INNER_RING_START_R, WHEEL.innerR - 2, mid - step / 2, mid + step / 2,
+        ));
+      }
     });
     this.setInnerHot(-1);
   }
@@ -153,7 +175,10 @@ export class Wheel {
     if (!this.opened) return;
     const dx = x - this.ox;
     const dy = y - this.oy;
-    if (this.innerItems.length && Math.hypot(dx, dy) >= 28 * this.scale && Math.hypot(dx, dy) < WHEEL.innerR * this.scale) {
+    const distance = Math.hypot(dx, dy);
+    if (
+      this.innerItems.length > 0 && distance >= INNER_RING_START_R * this.scale && distance < WHEEL.innerR * this.scale
+    ) {
       this.setHot(-1);
       this.setInnerHot(pickRingSlice(dx, dy, this.innerItems.length));
     } else {
@@ -167,7 +192,10 @@ export class Wheel {
     if (!this.opened) return null;
     const dx = x - this.ox;
     const dy = y - this.oy;
-    const inner = this.innerItems.length && Math.hypot(dx, dy) >= 28 * this.scale && Math.hypot(dx, dy) < WHEEL.innerR * this.scale;
+    const distance = Math.hypot(dx, dy);
+    const inner = this.innerItems.length > 0
+      && distance >= INNER_RING_START_R * this.scale
+      && distance < WHEEL.innerR * this.scale;
     const slice = inner ? pickRingSlice(dx, dy, this.innerItems.length) : pickSlice(dx, dy, WHEEL.innerR * this.scale);
     this.close();
     const item = slice >= 0 ? (inner ? this.innerItems[slice] : this.items[slice]) : undefined;
@@ -239,11 +267,14 @@ export class Wheel {
       if (i % 2 === 0) el('path', { d: sector(outerR, extR, mid - 22.5, mid + 22.5), fill: `url(#${id}-ext)` }, svg);
     });
 
-    [...Array(15).keys()].forEach((i) => {
-      const step = 360 / 15;
+    [...Array(MAX_INNER_ITEMS).keys()].forEach((i) => {
+      const step = 360 / MAX_INNER_ITEMS;
       const mid = -90 + i * step;
-      this.innerWedges.push(el('path', { d: sector(28, innerR - 2, mid - step / 2, mid + step / 2), fill: `url(#${id}-hot)`, 'fill-opacity': 0, class: 'innerWedge', display: 'none' }, svg));
-      const [x, y] = polar((28 + innerR - 2) / 2, mid);
+      this.innerWedges.push(el('path', {
+        d: sector(INNER_RING_START_R, innerR - 2, mid - step / 2, mid + step / 2),
+        fill: `url(#${id}-hot)`, 'fill-opacity': 0, class: 'innerWedge', display: 'none',
+      }, svg));
+      const [x, y] = polar((INNER_RING_START_R + innerR - 2) / 2, mid);
       const label = el('text', { x, y: y + 4, 'text-anchor': 'middle', class: 'innerTxt', display: 'none' }, svg);
       this.innerLabels.push(label);
     });

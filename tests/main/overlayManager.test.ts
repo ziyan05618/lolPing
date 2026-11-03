@@ -204,6 +204,17 @@ describe('OverlayManager emote clicks', () => {
     });
   });
 
+  it('clears the private recipient when the Everyone sector is selected', () => {
+    const ping = vi.fn(() => true);
+    mgr.setWhisperMembers([{ peer: '1111111111111111', name: 'Ana' }]);
+    mgr.setSharing({ ping, emote: () => true });
+    h.handlers.get(OVERLAY_WHISPER_SELECT)!({ sender: h.windows[0].webContents }, 0);
+    h.handlers.get(OVERLAY_WHISPER_SELECT)!({ sender: h.windows[0].webContents }, -1);
+    h.handlers.get(OVERLAY_PINGED)!({ sender: h.windows[0].webContents }, { id: 'danger', x: 10, y: 20 });
+
+    expect(ping).toHaveBeenCalledExactlyOnceWith({ id: 'danger', displayId: 1, x: 10, y: 20 });
+  });
+
   it('still drops the click ping for a ping click', () => {
     const emoted = vi.fn();
     const pinged = vi.fn();
@@ -462,6 +473,33 @@ describe('OverlayManager emote reports from the overlay', () => {
 
     expect(ping).toHaveBeenCalledWith({ id: 'danger', displayId: 1, x: 10, y: 20, to: '1234567890abcdef' });
     expect(emote).toHaveBeenCalledWith({ ref: 'gg', displayId: 1, x: 30, y: 40, to: '1234567890abcdef' });
+  });
+
+  it('unlocks the private target when the Everyone sector is hovered and the toggle key is pressed', () => {
+    const ping = vi.fn(() => true);
+    const whisperHover = vi.fn();
+    mgr.setSharing({ ping, emote: () => true });
+    mgr.setWhisperMembers([{ peer: '1234567890abcdef', name: 'Alex' }]);
+    mgr.on('whisperHover', whisperHover);
+    h.handlers.get(OVERLAY_WHISPER_HOVER)!({ sender: sender(0) }, 0);
+    mgr.toggleWhisperLock();
+    h.handlers.get(OVERLAY_WHISPER_HOVER)!({ sender: sender(0) }, -1);
+    mgr.toggleWhisperLock();
+    h.handlers.get(OVERLAY_PINGED)!({ sender: sender(0) }, { id: 'danger', x: 10, y: 20 });
+
+    expect(whisperHover).toHaveBeenNthCalledWith(1, true);
+    expect(whisperHover).toHaveBeenNthCalledWith(2, true);
+    expect(whisperHover).toHaveBeenLastCalledWith(false);
+    expect(ping).toHaveBeenCalledExactlyOnceWith({ id: 'danger', displayId: 1, x: 10, y: 20 });
+  });
+
+  it('does not capture the toggle key over Everyone when there is no private target', () => {
+    const whisperHover = vi.fn();
+    mgr.setWhisperMembers([{ peer: '1234567890abcdef', name: 'Alex' }]);
+    mgr.on('whisperHover', whisperHover);
+    h.handlers.get(OVERLAY_WHISPER_HOVER)!({ sender: sender(0) }, -1);
+
+    expect(whisperHover).toHaveBeenLastCalledWith(false);
   });
 
   it('does not draw a private ping locally when sharing rejects it', () => {

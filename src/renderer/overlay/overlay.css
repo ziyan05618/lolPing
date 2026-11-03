@@ -24,7 +24,7 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 #wheel .icon.hot, #emoteWheel .icon.hot { filter: none; transform: scale(1.18); }
 #wheel .centerTxt, #emoteWheel .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
 #wheel .backTxt, #emoteWheel .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
-.innerTxt { font: 600 8px "Segoe UI", sans-serif; fill: #fff0c8; pointer-events: none; }
+.innerTxt { font: 600 11px "Segoe UI", sans-serif; fill: #fff0c8; pointer-events: none; }
 #emoteWheel.whisper .core { stroke: #d89b42; }
 #emoteWheel.whisper .innerTxt { fill: #ffd58c; }
 #wheel.whisper .core { stroke: #d89b42; }

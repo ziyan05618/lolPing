@@ -405,8 +405,10 @@ fall back to the room topic. Older clients do not announce an X25519 key and are
 when a target loses its private channel, the send fails visibly without drawing a local ping or emote.
 
 Each joined room can have at most 15 pairwise subscriptions per client, alongside its room subscription. The relay
-subscription cap is 64. The inner ring's hover is reported to main as a roster index; the `~` key is captured only
-while a valid member is hovered, and that lock is kept in memory only for the room session.
+subscription cap is 64. The inner ring begins with an Everyone sector that clears the private target, followed by up to
+15 members. Its wedges and labels use the same equal-angle layout as hit testing. Hover reports a roster index to main;
+Everyone uses a separate sentinel so `~` can clear a lock there, while the key remains uncaptured outside the inner ring.
+The lock is kept in memory only for the room session.
 
 ### Room privacy
 
