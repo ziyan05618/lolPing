@@ -4,6 +4,8 @@ import { WHEEL_SLOTS } from '../../shared/pings';
 const NS = 'http://www.w3.org/2000/svg';
 const INNER_RING_START_R = 28;
 const MAX_INNER_ITEMS = 16;
+/** Kept faintly visible so the slices read as regions, not just as labels floating on the core. */
+const INNER_WEDGE_IDLE = 0.1;
 const INNER_LABEL_MAX = 5;
 
 function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>, parent: Element): SVGElementTagNameMap[K] {
@@ -119,6 +121,7 @@ export class Wheel {
       wedge.style.display = item ? '' : 'none';
       if (item) {
         const mid = -90 + i * step;
+        wedge.setAttribute('fill-opacity', String(INNER_WEDGE_IDLE));
         wedge.setAttribute('d', sector(
           INNER_RING_START_R, WHEEL.innerR - 2, mid - step / 2, mid + step / 2,
         ));
@@ -231,7 +234,7 @@ export class Wheel {
 
   private setInnerHot(i: number): void {
     if (i === this.innerHot) return;
-    if (this.innerHot >= 0) this.innerWedges[this.innerHot].setAttribute('fill-opacity', '0');
+    if (this.innerHot >= 0) this.innerWedges[this.innerHot].setAttribute('fill-opacity', String(INNER_WEDGE_IDLE));
     this.innerHot = i;
     if (i >= 0) {
       this.innerWedges[i].setAttribute('fill-opacity', '0.55');
@@ -267,12 +270,17 @@ export class Wheel {
       if (i % 2 === 0) el('path', { d: sector(outerR, extR, mid - 22.5, mid + 22.5), fill: `url(#${id}-ext)` }, svg);
     });
 
+    // Painted before the inner ring: an opaque disc drawn later would cover the whisper wedges and labels, which
+    // is exactly what happened — the ring was selectable but invisible.
+    el('circle', { r: innerR, fill: `url(#${id}-core)`, stroke: '#c8aa6e', 'stroke-width': 3, class: 'core' }, svg);
+
     [...Array(MAX_INNER_ITEMS).keys()].forEach((i) => {
       const step = 360 / MAX_INNER_ITEMS;
       const mid = -90 + i * step;
       this.innerWedges.push(el('path', {
         d: sector(INNER_RING_START_R, innerR - 2, mid - step / 2, mid + step / 2),
-        fill: `url(#${id}-hot)`, 'fill-opacity': 0, class: 'innerWedge', display: 'none',
+        fill: `url(#${id}-hot)`, 'fill-opacity': INNER_WEDGE_IDLE, class: 'innerWedge', display: 'none',
+        stroke: '#c8aa6e', 'stroke-opacity': 0.3, 'stroke-width': 1,
       }, svg));
       const [x, y] = polar((INNER_RING_START_R + innerR - 2) / 2, mid);
       const label = el('text', { x, y: y + 4, 'text-anchor': 'middle', class: 'innerTxt', display: 'none' }, svg);
@@ -293,7 +301,6 @@ export class Wheel {
     });
 
     el('circle', { r: innerR + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: 0.6 }, svg);
-    el('circle', { r: innerR, fill: `url(#${id}-core)`, stroke: '#c8aa6e', 'stroke-width': 3, class: 'core' }, svg);
     el('circle', { r: innerR - 7, fill: 'none', stroke: '#8a7448', 'stroke-width': 1, opacity: 0.6 }, svg);
     this.hub = el('image', { href: this.centerIcon, x: -20, y: -58, width: 40, height: 40, class: 'hub' }, svg);
     this.centerTxt = el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt' }, svg);
