@@ -338,20 +338,39 @@ export class RoomManager extends EventEmitter {
     if (!this.members.has(to)) return unavailable();
     const entry = [...this.whisperChannels].find(([, value]) => value.peer === to);
     const target = this.members.get(to);
-    const internetPath = target?.paths.internet;
-    const relay = [...this.active].find((t) => t.kind === 'internet' && t.shared && t.broadcastOn);
-    if (!entry || !internetPath || this.deps.now() - internetPath.seenAt >= ALIVE_MS.internet || !relay?.broadcastOn) {
-      return unavailable();
-    }
+    if (!entry || !target) return unavailable();
     const [topic, channel] = entry;
+    const now = this.deps.now();
+    const internetPath = target?.paths.internet;
+    const relay = [...this.active].find((t) =>
+      t.kind === 'internet' && t.shared && t.status === 'ok' && t.broadcastOn !== undefined,
+    );
+    const canRelay = relay !== undefined && internetPath !== undefined && now - internetPath.seenAt < ALIVE_MS.internet;
+    const lanPath = target.paths.lan;
+    const lan = [...this.active].find((t) => t.kind === 'lan' && !t.shared && t.status === 'ok');
+    const canLan = lanPath !== undefined && now - lanPath.seenAt < ALIVE_MS.lan && lan !== undefined;
+    if (!canRelay && !canLan) return unavailable();
+
     const decision = this.allowPolicy(this.identity.pk.toString('base64'), type);
     if (!decision.allowed) {
       this.emit('policyCooldown', { type, retryAfterMs: decision.retryAfterMs } satisfies PolicyCooldown);
       return false;
     }
+
+    if (!canRelay) {
+      try {
+        const packet = this.sealWith(whisperMessageKey(channel.key), { ...body, to });
+        return this.sendLanPacket(to, packet) || unavailable();
+      } catch {
+        return unavailable();
+      }
+    }
+
     try {
       const packet = this.sealWith(whisperMessageKey(channel.key), body);
-      if (!this.relayCap.allow(relay.kind, RELAY_PING_RATE, RELAY_PING_BURST)) return unavailable();
+      if (!relay || !relay.broadcastOn || !this.relayCap.allow(relay.kind, RELAY_PING_RATE, RELAY_PING_BURST)) {
+        return unavailable();
+      }
       return relay.broadcastOn(topic, packet, type) || unavailable();
     } catch {
       return unavailable();
@@ -464,24 +483,38 @@ export class RoomManager extends EventEmitter {
     const relayAvailable = [...this.active].some((t) =>
       t.kind === 'internet' && t.shared && t.status === 'ok' && t.broadcastOn !== undefined,
     );
-    if (!relayAvailable) return [];
+    const lanAvailable = [...this.active].some((t) => t.kind === 'lan' && !t.shared && t.status === 'ok');
     return [...this.members.values()]
-      .filter((m) => m.paths.internet !== undefined && now - m.paths.internet.seenAt < ALIVE_MS.internet
-        && [...this.whisperChannels.values()].some((channel) => channel.peer === m.peer))
+      .filter((m) => {
+        if (![...this.whisperChannels.values()].some((channel) => channel.peer === m.peer)) return false;
+        const internetPath = m.paths.internet;
+        const reachableOverRelay = relayAvailable && internetPath !== undefined
+          && now - internetPath.seenAt < ALIVE_MS.internet;
+        const lanPath = m.paths.lan;
+        const reachableOverLan = lanAvailable && lanPath !== undefined && now - lanPath.seenAt < ALIVE_MS.lan;
+        return reachableOverRelay || reachableOverLan;
+      })
       .map((m) => ({ peer: m.peer, name: m.name }));
   }
 
   /** Seals and sends `body` straight to one member over its LAN path. Nothing goes when LAN isn't what reaches them. */
   sendToLan(peer: string, body: Record<string, unknown>): void {
     if (this.phase === 'idle' || !this.keys) return;
-    const m = this.members.get(peer);
-    const route = m && this.route(m);
-    if (!route || route.transport.shared) return;
     try {
-      route.transport.sendTo(route.key, this.seal(body));
+      this.sendLanPacket(peer, this.seal(body));
     } catch {
       // a body that wouldn't fit the packet cap is dropped; the sender's next want or tick retries
     }
+  }
+
+  /** Sends an already sealed packet to one member over their current LAN route. */
+  private sendLanPacket(peer: string, packet: Uint8Array): boolean {
+    if (this.phase === 'idle' || !this.keys) return false;
+    const m = this.members.get(peer);
+    const route = m && this.route(m);
+    if (!route || route.transport.shared || route.transport.kind !== 'lan') return false;
+    route.transport.sendTo(route.key, packet);
+    return true;
   }
 
   /** One sealed broadcast on every shared transport: a relay reaches the whole room. Chunk pacing is the caller's job. */
@@ -723,12 +756,36 @@ export class RoomManager extends EventEmitter {
 
   private onPacket(t: Transport, key: PeerKey, packet: Uint8Array, eventType?: RoomEventType, topic?: string): void {
     if (!this.keys) return;
-    const privateChannel = t.shared && topic !== undefined && topic !== this.keys.relayTopic ? this.whisperChannels.get(topic) : undefined;
+    let privateChannel = t.shared && topic !== undefined && topic !== this.keys.relayTopic
+      ? this.whisperChannels.get(topic)
+      : undefined;
     if (t.shared && topic !== undefined && topic !== this.keys.relayTopic && !privateChannel) return;
-    let plain = open(privateChannel ? whisperMessageKey(privateChannel.key) : this.keys.msgKey, packet);
-    const decoded = plain && decodeSigned(plain);
+    let decoded: ReturnType<typeof decodeSigned> | null = null;
+    if (privateChannel) {
+      const plain = open(whisperMessageKey(privateChannel.key), packet);
+      decoded = plain && decodeSigned(plain);
+    } else {
+      const plain = open(this.keys.msgKey, packet);
+      decoded = plain && decodeSigned(plain);
+      if (!decoded && t.kind === 'lan' && !t.shared && topic === undefined) {
+        for (const channel of this.whisperChannels.values()) {
+          const privatePlain = open(whisperMessageKey(channel.key), packet);
+          const candidate = privatePlain && decodeSigned(privatePlain);
+          if (candidate?.msg.peer === channel.peer) {
+            privateChannel = channel;
+            decoded = candidate;
+            break;
+          }
+        }
+      }
+    }
     if (!decoded || decoded.msg.peer === this.self) return;
     const { msg, body, sig } = decoded;
+    if (privateChannel) {
+      if ((msg.t !== 'emote' && msg.t !== 'ping') || msg.to !== this.self || msg.peer !== privateChannel.peer) return;
+    } else if ((msg.t === 'emote' || msg.t === 'ping') && msg.to !== undefined) {
+      return;
+    }
     // Chunks are never signed (a signature wouldn't fit), and needn't be: a still is checked against its hash when
     // assembled. So whoever a chunk claims to be from, it never moves a replay window, a liveness clock or a route.
     if (msg.t === 'chunk') {
@@ -763,11 +820,6 @@ export class RoomManager extends EventEmitter {
       return;
     }
     if (!m) return;
-    if (privateChannel) {
-      if ((msg.t !== 'emote' && msg.t !== 'ping') || msg.to !== this.self || msg.peer !== privateChannel.peer) return;
-    } else if ((msg.t === 'emote' || msg.t === 'ping') && msg.to !== undefined) {
-      return;
-    }
     this.heard(m, t, key);
     const type = roomEventType(msg.t);
     if (type && msg.t !== 'ballot') {

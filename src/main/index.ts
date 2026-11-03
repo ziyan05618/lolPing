@@ -469,6 +469,10 @@ function start(): void {
     settingsWindow()?.webContents.send(SETTINGS_CH.roomChanged, s);
   }
   const syncRoomFlags = (): void => room.setStatusFlags({ paused: !enabled, roomMuted: settings.roomMuted });
+  const syncWhisperMembers = (): void => {
+    const state = room.state();
+    overlays.setWhisperMembers(room.whisperMembers(), state.members.some((member) => !member.self));
+  };
   room.on('state', pushRoom);
   // The vote widget and the roster live in their own windows that never take focus.
   const panels = new PanelWindows();
@@ -481,7 +485,7 @@ function start(): void {
     bridge.send(configCommand(effective(settings), enabled, live));
   };
   room.on('state', () => {
-    overlays.setWhisperMembers(room.whisperMembers());
+    syncWhisperMembers();
     const next = liveKeys(settings, { active: room.state().phase === 'active' }, enabled);
     if (next.text !== live.text || next.panel !== live.panel) sendConfig();
   });
@@ -511,7 +515,7 @@ function start(): void {
   };
   overlays.on('whisperHover', (on: boolean) => setWhisperWatch(on));
   overlays.on('whisperGone', () => overlays.toast(text().whisper.targetLeft, ''));
-  overlays.setWhisperMembers(room.whisperMembers());
+  syncWhisperMembers();
   room.on('remoteEmote', (p) => {
     if (featureOn(settings, 'emotes')) overlays.spawnRemoteEmote(p);
   });

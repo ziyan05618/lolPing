@@ -516,6 +516,25 @@ describe('OverlayManager emote reports from the overlay', () => {
   });
 });
 
+describe('OverlayManager whisper hint', () => {
+  it('shows the old-peer hint only when other room members have no whisper channel', () => {
+    const copy = {
+      everyone: 'Everyone', oldPeer: 'Peer too old for private messages',
+      prefix: (name: string) => `Private · ${name}`, locked: (name: string) => `Locked · ${name}`,
+    };
+    const state = (): Record<string, unknown> | undefined =>
+      sent(0).filter(([channel]) => channel === 'whisper:state').at(-1)?.[1] as Record<string, unknown> | undefined;
+    mgr.setWhisperCopy(copy);
+    mgr.setWhisperMembers([], true);
+    expect(state()).toMatchObject({ members: [], hint: copy.oldPeer });
+
+    mgr.setWhisperMembers([{ peer: '1234567890abcdef', name: 'Alex' }], true);
+    expect(state()).toMatchObject({ hint: null });
+    mgr.setWhisperMembers([], false);
+    expect(state()).toMatchObject({ hint: null });
+  });
+});
+
 describe('OverlayManager kept ping', () => {
   const keepOn = () => mgr.updateSettings(overlaySettings({ ...DEFAULT_SETTINGS, keepLastPing: true }));
 

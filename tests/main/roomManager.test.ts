@@ -844,6 +844,26 @@ describe('internet over a shared transport', () => {
     manager.quit();
   });
 
+  it('rejects a private-looking ping sent on the shared room topic', async () => {
+    const relay = new FakeWhisperTransport('internet');
+    const manager = make([relay]);
+    const received: RemotePing[] = [];
+    manager.on('remotePing', (p: RemotePing) => received.push(p));
+    await manager.join(CODE);
+    await vi.advanceTimersByTimeAsync(3000);
+    const sender = new SignedRemote(0x67, 'net:sender', relay);
+    relay.deliver(sender.key, sender.packet({
+      t: 'presence', proto: 1, app: '0.6.4', name: 'Sender', color: 2, status: 'on',
+    }), undefined, KEYS.relayTopic);
+
+    relay.deliver(sender.key, sender.packet({
+      t: 'ping', ping: 'danger', d: 1, x: 0.2, y: 0.3, to: manager.self,
+    }), 'ping', KEYS.relayTopic);
+
+    expect(received).toHaveLength(0);
+    manager.quit();
+  });
+
   it('caps pings over a shared transport at 5/s with bursts of 10, while LAN members still get every ping', async () => {
     await joinNow();
     new Remote('1111111111111111', 'lan:a', lan).presence();
@@ -1623,6 +1643,45 @@ describe('signed members', () => {
     if (!key) throw new Error('bad key');
     expect(verifyBody(key, presence.body, presence.sig)).toBe(true);
     expect(sent.find((d) => d.msg.t === 'chunk')?.sig).toBeNull();
+  });
+
+  it('sends LAN whispers with the pairwise key and accepts only matching pairwise packets', () => {
+    expect(room.whisperMembers()).toEqual([{ peer: sam.peer, name: 'Sam' }]);
+    const ownPresence = lan.sent
+      .map(({ packet }) => {
+        const plain = open(KEYS.msgKey, packet);
+        return plain && decodeSigned(plain)?.msg;
+      })
+      .find((message) => message?.t === 'presence' && message.peer === room.self);
+    if (!ownPresence || ownPresence.t !== 'presence' || !ownPresence.xk) throw new Error('our signed presence was missing');
+    const ownXpk = publicWhisperKeyOf(Buffer.from(ownPresence.xk, 'base64'));
+    if (!ownXpk) throw new Error('our whisper public key was invalid');
+    const messageKey = whisperMessageKey(whisperSecret(sam.id.xkey, ownXpk));
+    lan.sent = [];
+
+    const pingResults = Array.from({ length: 6 }, () => room.sendPing('danger', { d: 1, x: 0.2, y: 0.3 }, sam.peer));
+    expect(pingResults).toEqual([true, true, true, true, true, false]);
+    room.sendEmote('gg', { d: 1, x: 0.2, y: 0.3 }, undefined, sam.peer);
+
+    const direct = lan.sent.filter((sent) => sent.to === sam.key);
+    expect(direct).toHaveLength(6);
+    const decoded = direct.map(({ packet }) => {
+      expect(open(KEYS.msgKey, packet)).toBeNull();
+      const plain = open(messageKey, packet);
+      if (!plain) throw new Error('private LAN packet was not pairwise encrypted');
+      return decodeSigned(plain)?.msg;
+    });
+    expect(decoded.slice(0, 5).every((message) => message?.t === 'ping' && message.to === sam.peer)).toBe(true);
+    expect(decoded[5]).toMatchObject({ t: 'emote', to: sam.peer });
+
+    const before = pings.length;
+    sam.ping({ to: room.self });
+    expect(pings).toHaveLength(before);
+    const privatePing = sam.packet({
+      t: 'ping', ping: 'danger', d: 1, x: 0.2, y: 0.3, to: room.self,
+    }, messageKey);
+    lan.deliver(sam.key, privatePing);
+    expect(pings).toHaveLength(before + 1);
   });
 
   it('keeps a signed member when someone forges their bye', () => {

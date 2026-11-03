@@ -55,6 +55,7 @@ let whisperMembers: { peer: string; name: string }[] = [];
 let whisperEveryone = '';
 let whisperTarget: string | null = null;
 let whisperLabel: string | null = null;
+let whisperHint: string | null = null;
 
 function whisperRingItems(): { key: string; icon: string; label: string }[] {
   return whisperMembers.length
@@ -92,6 +93,8 @@ function applySettings(s: OverlaySettings): void {
   emoteWheel.setItems(s.emoteWheel.map((ref) => emoteItem(ref, s.customEmotes)));
   pingWheel.setInnerItems(whisperRingItems());
   emoteWheel.setInnerItems(whisperRingItems());
+  pingWheel.setCenterHint(whisperHint);
+  emoteWheel.setCenterHint(whisperHint);
   pingWheel.setCenterLabel(whisperLabel);
   emoteWheel.setCenterLabel(whisperLabel);
   pingSvg.classList.toggle('whisper', whisperTarget !== null);
@@ -161,8 +164,11 @@ window.overlay.on('whisper:state', (s) => {
   whisperEveryone = s.everyone;
   whisperTarget = s.target;
   whisperLabel = s.label;
+  whisperHint = s.hint;
   pingWheel.setInnerItems(whisperRingItems());
   emoteWheel.setInnerItems(whisperRingItems());
+  pingWheel.setCenterHint(whisperHint);
+  emoteWheel.setCenterHint(whisperHint);
   pingSvg.classList.toggle('whisper', whisperTarget !== null);
   emoteSvg.classList.toggle('whisper', whisperTarget !== null);
   pingWheel.setCenterLabel(whisperLabel);

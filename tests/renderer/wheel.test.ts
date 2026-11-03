@@ -35,6 +35,19 @@ function makeWheel(id = 'wheel') {
   return { wheel, svg, hover };
 }
 
+const polar = (radius: number, degrees: number): [number, number] => [
+  radius * Math.cos((degrees * Math.PI) / 180),
+  radius * Math.sin((degrees * Math.PI) / 180),
+];
+
+function sectorPath(r0: number, r1: number, a0: number, a1: number): string {
+  const [x0, y0] = polar(r0, a0);
+  const [x1, y1] = polar(r1, a0);
+  const [x2, y2] = polar(r1, a1);
+  const [x3, y3] = polar(r0, a1);
+  return `M${x0},${y0} L${x1},${y1} A${r1},${r1} 0 0 1 ${x2},${y2} L${x3},${y3} A${r0},${r0} 0 0 0 ${x0},${y0}Z`;
+}
+
 beforeEach(() => {
   vi.stubGlobal('document', { createElementNS: () => new FakeElement() });
 });
@@ -138,6 +151,47 @@ describe('wheel inner ring', () => {
     expect(innerHover).toHaveBeenLastCalledWith(-1);
     expect(hover).not.toHaveBeenCalled();
   });
+
+  it.each([2, 3, 15])('draws and hits equal sectors with %i room members', (memberCount) => {
+    const svg = new FakeElement();
+    svg.id = 'wheel';
+    const innerHover = vi.fn();
+    const wheel = new Wheel(svg as unknown as SVGSVGElement, 'WHEEL', 'icon.png', vi.fn(), innerHover);
+    const items = [
+      { key: '', icon: '', label: 'Everyone' },
+      ...Array.from({ length: memberCount }, (_, i) => ({
+        key: `peer-${i}`, icon: '', label: i === 0 ? 'Alexandra' : `Player ${i}`,
+      })),
+    ];
+    wheel.setInnerItems(items);
+
+    const wedges = svg.children.filter((child) => child.attrs.get('class') === 'innerWedge');
+    const labels = svg.children.filter((child) => child.attrs.get('class') === 'innerTxt');
+    const step = 360 / items.length;
+    const radius = (28 + WHEEL.innerR - 2) / 2;
+    expect(wedges).toHaveLength(16);
+    expect(wedges.slice(0, items.length).every((wedge) => !wedge.attrs.has('display'))).toBe(true);
+    expect(wedges.slice(items.length).every((wedge) => wedge.attrs.get('display') === 'none')).toBe(true);
+    expect(labels[1].textContent).toBe('Alexa…');
+
+    for (let i = 0; i < items.length; i++) {
+      const mid = -90 + i * step;
+      expect(wedges[i].attrs.get('d')).toBe(sectorPath(
+        28, WHEEL.innerR - 2, mid - step / 2, mid + step / 2,
+      ));
+      const [labelX, labelY] = polar(radius, mid);
+      expect(Number(labels[i].attrs.get('x'))).toBeCloseTo(labelX);
+      expect(Number(labels[i].attrs.get('y'))).toBeCloseTo(labelY + 4);
+
+      const [dx, dy] = polar(radius, mid);
+      wheel.open(800, 500);
+      wheel.move(800 + dx, 500 + dy);
+      expect(innerHover).toHaveBeenLastCalledWith(i);
+      expect(wheel.release(800 + dx, 500 + dy)).toEqual({
+        key: items[i].key, x: 800, y: 500, inner: true,
+      });
+    }
+  });
 });
 
 describe('wheel labels', () => {
@@ -162,6 +216,20 @@ describe('wheel labels', () => {
     expect(centre(svg)).toBe('ASK');
     wheel.setCenterLabel(null);
     expect(centre(svg)).toBe('WHEEL');
+  });
+
+  it('shows a small centre hint independently of the wheel label', () => {
+    const { wheel, svg } = makeWheel();
+    wheel.setItems(Array.from({ length: 8 }, (_, i) => ({ key: String(i), icon: `${i}.png`, label: `Label ${i}` })));
+    const hint = (): string => svg.children.find((child) => child.attrs.get('class') === 'centerHint')?.textContent ?? '';
+    wheel.setCenterHint('Peer too old for private messages');
+    expect(hint()).toBe('Peer too old for private messages');
+    wheel.open(800, 500);
+    wheel.move(800, 360);
+    expect(centre(svg)).toBe('Label 0');
+    expect(hint()).toBe('Peer too old for private messages');
+    wheel.setCenterHint(null);
+    expect(hint()).toBe('');
   });
 
   it('dims the slices it is told to, and only those', () => {

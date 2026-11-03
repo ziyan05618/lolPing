@@ -38,6 +38,7 @@ export interface OverlayEvents {
     target: string | null;
     locked: boolean;
     label: string | null;
+    hint: string | null;
   };
   'policy:cooldown': { type: 'ping' | 'emote' | 'text'; retryAfterMs: number; template: string };
   /** `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one. */

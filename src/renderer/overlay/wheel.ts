@@ -68,8 +68,10 @@ export class Wheel {
   private readonly icons: SVGImageElement[] = [];
   private hub: SVGImageElement | null = null;
   private centerTxt: SVGTextElement | null = null;
+  private centerHintTxt: SVGTextElement | null = null;
   /** Replaces the constructor's centre text while set. */
   private idleLabel: string | null = null;
+  private centerHint: string | null = null;
   private dimmed = new Set<string>();
   private items: readonly WheelItem[] = [];
   private hot = -1;
@@ -136,6 +138,11 @@ export class Wheel {
   /** The centre's text while no labelled slice is hovered; null puts the wheel's own back. */
   setCenterLabel(text: string | null): void {
     this.idleLabel = text;
+    this.showCenterText();
+  }
+
+  setCenterHint(text: string | null): void {
+    this.centerHint = text;
     this.showCenterText();
   }
 
@@ -247,9 +254,11 @@ export class Wheel {
   }
 
   private showCenterText(): void {
-    if (!this.centerTxt) return;
-    const label = this.innerHot >= 0 ? this.innerItems[this.innerHot]?.label : this.hot >= 0 ? this.items[this.hot]?.label : undefined;
-    this.centerTxt.textContent = label ? fitLabel(label) : this.idleLabel ?? this.centerLabel;
+    if (this.centerTxt) {
+      const label = this.innerHot >= 0 ? this.innerItems[this.innerHot]?.label : this.hot >= 0 ? this.items[this.hot]?.label : undefined;
+      this.centerTxt.textContent = label ? fitLabel(label) : this.idleLabel ?? this.centerLabel;
+    }
+    if (this.centerHintTxt) this.centerHintTxt.textContent = this.centerHint ?? '';
   }
 
   private build(): void {
@@ -308,6 +317,7 @@ export class Wheel {
     this.hub = el('image', { href: this.centerIcon, x: -20, y: -58, width: 40, height: 40, class: 'hub' }, svg);
     this.centerTxt = el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt' }, svg);
     this.centerTxt.textContent = this.centerLabel;
+    this.centerHintTxt = el('text', { x: 0, y: 25, 'text-anchor': 'middle', class: 'centerHint' }, svg);
     el('text', { x: 6, y: 50, 'text-anchor': 'middle', class: 'backTxt' }, svg).textContent = 'BACK';
     const mouse = el('g', { opacity: 0.55, transform: 'translate(-26,40)' }, svg);
     el('rect', { x: 0, y: 0, width: 11, height: 16, rx: 5.5, fill: 'none', stroke: '#6c7a7c', 'stroke-width': 1.3 }, mouse);

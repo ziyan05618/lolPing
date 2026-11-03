@@ -112,11 +112,17 @@ export class OverlayManager extends EventEmitter {
   private captureExcluded = false;
   private sharing: { ping(p: SharedPing): boolean; emote(p: SharedEmote): boolean } | null = null;
   private whisperMembers: { peer: string; name: string }[] = [];
+  private hasOtherMembers = false;
   private whisperTarget: string | null = null;
   private whisperHover: string | null = null;
   private whisperEveryoneHovered = false;
   private whisperLocked = false;
-  private whisperCopy: { everyone: string; prefix(name: string): string; locked(name: string): string } | null = null;
+  private whisperCopy: {
+    everyone: string;
+    oldPeer: string;
+    prefix(name: string): string;
+    locked(name: string): string;
+  } | null = null;
   /** Overlays whose page last said it has nothing on it, parked off their displays (Windows only). */
   private readonly idleWindows = new WeakSet<BrowserWindow>();
 
@@ -428,9 +434,10 @@ export class OverlayManager extends EventEmitter {
     this.sharing = sharing;
   }
 
-  setWhisperMembers(members: readonly { peer: string; name: string }[]): void {
+  setWhisperMembers(members: readonly { peer: string; name: string }[], hasOtherMembers = members.length > 0): void {
     const next = members.map(({ peer, name }) => ({ peer, name })).slice(0, 15);
     this.whisperMembers = next;
+    this.hasOtherMembers = hasOtherMembers;
     if (this.whisperTarget && !next.some((m) => m.peer === this.whisperTarget)) {
       this.whisperTarget = null;
       this.whisperLocked = false;
@@ -444,7 +451,12 @@ export class OverlayManager extends EventEmitter {
     this.broadcastWhisperState();
   }
 
-  setWhisperCopy(copy: { everyone: string; prefix(name: string): string; locked(name: string): string }): void {
+  setWhisperCopy(copy: {
+    everyone: string;
+    oldPeer: string;
+    prefix(name: string): string;
+    locked(name: string): string;
+  }): void {
     this.whisperCopy = copy;
     this.broadcastWhisperState();
   }
@@ -485,6 +497,7 @@ export class OverlayManager extends EventEmitter {
     for (const id of this.windows.keys()) this.send(id, 'whisper:state', {
       members: this.whisperMembers, everyone: this.whisperCopy?.everyone ?? '',
       target: this.whisperTarget, locked: this.whisperLocked, label,
+      hint: this.hasOtherMembers && this.whisperMembers.length === 0 ? this.whisperCopy?.oldPeer ?? null : null,
     });
   }
 
